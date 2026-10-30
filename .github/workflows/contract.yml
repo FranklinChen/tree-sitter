@@ -1,0 +1,117 @@
+# CI for this fork's one feature, the grammar contract (see FORK.md).
+#
+# Upstream's own workflows run only on `master` and release branches; this
+# one runs on the contract branches (`contract/<upstream release>`, one per
+# adopted release) and checks three things:
+#
+# - the generator's tests and lints, where the change lives;
+# - Tree-sitter's own full suite, by its documented procedure (the fork's CLI
+#   regenerates every fixture parser, then `cargo xtask test`);
+# - acceptance: for every fixture grammar, the fork writes exactly what the
+#   upstream release it is based on writes, plus grammar-contract.json
+#   (`fork/acceptance.sh`).
+
+name: Grammar contract
+
+on:
+  push:
+    branches:
+      - 'contract/**'
+  pull_request:
+    branches:
+      - 'contract/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+jobs:
+  generator:
+    name: Generator tests and lints
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up stable Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          toolchain: stable
+          components: clippy
+
+      - name: Test the generator
+        run: cargo test --locked -p tree-sitter-generate --lib
+
+      - name: Lint the generator
+        run: cargo clippy --locked -p tree-sitter-generate --all-targets -- -D warnings
+
+      - name: Build the generator without default features
+        run: cargo check --locked -p tree-sitter-generate --no-default-features
+
+      - name: Lint the CLI
+        run: cargo clippy --locked -p tree-sitter-cli -- -D warnings
+
+  suite:
+    name: Tree-sitter's full suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up stable Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          toolchain: stable
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Fetch fixture grammars
+        run: cargo xtask fetch-fixtures
+
+      - name: Regenerate fixture parsers with this CLI
+        run: cargo xtask generate-fixtures
+
+      - name: Run the test suite
+        run: cargo xtask test
+
+  acceptance:
+    name: Acceptance against upstream
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up stable Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          toolchain: stable
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Build this fork's CLI
+        run: cargo build --locked -p tree-sitter-cli
+
+      # The upstream release this fork is based on: the version the fork's
+      # own tree-sitter-cli declares, so adopting a new upstream tag needs no
+      # edit here.
+      - name: Install the upstream CLI the fork is based on
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "tree-sitter-cli") | .version')
+          cargo install tree-sitter-cli --locked --version "$version" \
+            --root "$RUNNER_TEMP/upstream"
+
+      - name: Fetch fixture grammars
+        run: cargo xtask fetch-fixtures
+
+      - name: Compare outputs on every fixture grammar
+        run: |
+          fork/acceptance.sh "$RUNNER_TEMP/upstream/bin/tree-sitter" \
+            "$PWD/target/debug/tree-sitter" "$RUNNER_TEMP/acceptance"
