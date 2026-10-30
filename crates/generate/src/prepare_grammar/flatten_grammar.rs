@@ -277,6 +277,29 @@ fn emit_ready(
     true
 }
 
+/// Enumerate every live path through the rule tree `root`, calling `on_path`
+/// with the state after each one.
+/// A path through an empty choice is dead and skipped.
+pub(super) fn flatten_variable(
+    pool: &RulePool,
+    reserved_ids: &FxHashMap<StrId, u16>,
+    root: RuleId,
+    st: &mut FlattenState,
+    mut on_path: impl FnMut(&mut FlattenState),
+) -> FlattenGrammarResult<()> {
+    st.reset_variable();
+    loop {
+        apply(pool, reserved_ids, root, FlattenCtx::default(), true, st)?;
+        if !st.dead {
+            on_path(st);
+        }
+        if !st.choices.advance() {
+            return Ok(());
+        }
+        st.reset_path();
+    }
+}
+
 pub(super) fn flatten_grammar(
     g: &InputGrammar,
     meta: &ExtractedGrammarMeta,
@@ -298,24 +321,9 @@ pub(super) fn flatten_grammar(
     for v in &g.variables {
         let prod_start = out.productions.len() as u32;
         let mut dropped_for_eof = false;
-        st.reset_variable();
-        loop {
-            apply(
-                &g.pool,
-                &reserved_ids,
-                v.root,
-                FlattenCtx::default(),
-                true,
-                st,
-            )?;
-            if !st.dead {
-                dropped_for_eof |= !emit(st, out, prod_start);
-            }
-            if !st.choices.advance() {
-                break;
-            }
-            st.reset_path();
-        }
+        flatten_variable(&g.pool, &reserved_ids, v.root, st, |st| {
+            dropped_for_eof |= !emit(st, out, prod_start);
+        })?;
         if dropped_for_eof && prod_start == out.productions.len() as u32 {
             return Err(FlattenGrammarError::NoReachableProductions(
                 g.pool.resolve(v.name).to_string(),
