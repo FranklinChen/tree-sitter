@@ -57,7 +57,7 @@ grammar among Tree-sitter's fixtures has this shape.
 
 ## Commits
 
-On top of `v0.27.1`, four commits, by subject:
+On top of `v0.27.1`, six commits, by subject:
 
 1. `refactor(generate): factor out flattening's path enumeration, inlining's walk and supertype subtypes`: no change of
    behavior or output; three upstream loops become functions the contract can share. A conflict here, when adopting a
@@ -67,12 +67,18 @@ On top of `v0.27.1`, four commits, by subject:
 3. `ci: check the fork's generator, Tree-sitter's suite and acceptance against upstream`: the workflow and
    `fork/acceptance.sh`.
 4. `docs: record the fork's scope and how it follows upstream releases`: this file.
+5. `ci: normalize node's process id in acceptance refusals, and show differences`: Node prefixes its warnings with
+   `(node:<pid>)`, which differs between runs, so acceptance compares refusals with it removed and prints any remaining
+   difference.
+6. `feat(generate)!: state each variable's form as one value (contract format 2)`: format 1 wrote a variable's kind,
+   inlining and subtypes as three fields, which admitted combinations Tree-sitter never builds; format 2 writes the
+   combination as one `form`, and an external token's `kind` without the `auxiliary` Tree-sitter never gives one.
 
 ## How it has been verified
 
 As of 2026-10-30, on this series:
 
-- **Generator tests and lints.** `cargo test -p tree-sitter-generate --lib` (91 tests, among them the proof's negative
+- **Generator tests and lints.** `cargo test -p tree-sitter-generate --lib` (93 tests, among them the proof's negative
   control, which removes one path from a tree and expects the refusal, and regression tests for every defect the reviews
   found), `cargo clippy -p tree-sitter-generate --all-targets -- -D warnings`, `cargo clippy -p tree-sitter-cli -- -D
   warnings`, and a build with `--no-default-features`.
@@ -82,10 +88,11 @@ As of 2026-10-30, on this series:
     `node-types.json`, `grammar.json` and `tree_sitter/` headers; the plain run writes no contract and the flagged run
     writes one (so its proof passed);
   - 12 grammars refused by all three with identical messages (6 at parser generation, 6 while reading `grammar.js`).
-- **The schema.** All 77 contracts validate against the JSON schema, which rejects a field of the earlier format.
+- **The schema.** All 77 contracts validate against the JSON schema (`check-jsonschema` 0.39.0), which rejects a field
+  of the earlier format.
 - **Tree-sitter's own suite.** `cargo xtask fetch-fixtures`, `cargo xtask generate-fixtures`, `cargo xtask test`.
-  410 passed, 0 failed, 1 ignored, including the corpus tests of every fixture language (404 before the rework; the six
-  added are the generator's new tests).
+  412 passed, 0 failed, 1 ignored, including the corpus tests of every fixture language (404 before the contract; the
+  eight added are the generator's new tests).
 - **Size and cost.** On the fixture grammars the contract is 3-17 times the size of `node-types.json` and at most a fifth
   of `parser.c`; with `--no-parser`, preparing it adds about 0.2 seconds to the largest grammar in a debug build.
 
@@ -98,8 +105,9 @@ Not done:
 - The Wasm build and its tests (`cargo xtask generate-fixtures --wasm`, `cargo xtask test-wasm`) were not run; the change
   does not touch the runtime library or the Wasm bindings.
 
-Format `tree-sitter-contract-fork/grammar-contract/1` is frozen when this fork is first published: from then on, any
-change a consumer must know about changes the format string.
+A published contract format is never changed in place: any change a consumer must know about is a new version of the
+format string. Format 1 was published with the first four commits and is superseded by format 2; a consumer reading
+format 1 pins a commit before the sixth.
 
 ## Continuous integration
 

@@ -27,15 +27,15 @@ Tree-sitter writes.
   and a grammar upstream refuses is refused with the same message.
 - **Symbols are numbers, not names.** Every symbol is written as `{ "kind": ..., "index": ... }`, an index into the array
   its kind names, exactly as the generator numbers it. No consumer has to match names.
-- **It is versioned.** `format` names the format and its version, and changes on any change a consumer must know about.
-  This page describes `tree-sitter-contract-fork/grammar-contract/1`, whose JSON schema is
-  `docs/src/assets/schemas/grammar-contract.schema.json`.
+- **It is versioned.** `format` names the format and its version. A published version is never changed; any change a
+  consumer must know about is a new version. This page describes `tree-sitter-contract-fork/grammar-contract/2`, whose
+  JSON schema is `docs/src/assets/schemas/grammar-contract.schema.json`.
 
 ## Top level
 
 ```json
 {
-  "format": "tree-sitter-contract-fork/grammar-contract/1",
+  "format": "tree-sitter-contract-fork/grammar-contract/2",
   "variables": [ ... ],
   "terminals": [ ... ],
   "external_tokens": [ ... ],
@@ -55,9 +55,10 @@ Tree-sitter writes.
   unaliased in a production. The runtime applies such an alias everywhere the symbol appears, including inside `ERROR`
   nodes; in the contract's own productions and rule trees it is already written on each step.
 
-Each entry's `kind` is its visibility: `named` and `anonymous` symbols are nodes; `hidden` and `auxiliary` ones are not.
-An `auxiliary` variable is one Tree-sitter generated (a repetition); an `auxiliary` terminal is a token Tree-sitter
-extracted from a rule.
+A terminal's or external token's `kind` is its visibility: `named` and `anonymous` tokens are nodes; `hidden` ones are
+not, and neither are `auxiliary` terminals, which are tokens Tree-sitter extracted from a rule. An external token is
+never `auxiliary`: Tree-sitter derives its visibility from its spelling alone. A variable states its `form` instead
+(below).
 
 The file is written without whitespace; a JSON pretty-printer makes it readable.
 
@@ -66,24 +67,29 @@ The file is written without whitespace; a JSON pretty-printer makes it readable.
 ```json
 {
   "name": "pair",
-  "kind": "named",
+  "form": "named",
   "rule": { ... },
-  "inline": false,
   "productions": [ { "steps": [ ... ], "requires_eof": false } ]
 }
 ```
+
+- `form`: what the variable is. Tree-sitter keeps a variable's kind, whether it is inlined and whether it is a supertype
+  as separate facts, but builds only six combinations of them, and `form` names the combination:
+  - `named`, `anonymous`: a visible node, named or anonymous.
+  - `hidden`: no node; its children are placed in its parent.
+  - `supertype`: hidden and listed in the grammar's `supertypes`. Only this form has `subtypes`: its subtypes as
+    `node-types.json` lists them, `{ "type", "named" }` in the same order, computed by the same code.
+  - `inline`: listed in the grammar's `inline`, so it is replaced by its productions wherever it is referenced and never
+    produces a node.
+  - `repetition`: a variable Tree-sitter generated for a repeat (below).
 
 - `rule`: the variable's rule tree just before flattening, with tokens extracted, repeats replaced by references to
   their auxiliary variables, and every reference to an `inline` variable replaced by that variable's tree.
 - `productions`: the variable's final productions after inlining, each written once. Each step has a `symbol` and, when
   present, an `alias` (`{ "value", "named" }`) and a `field`; `requires_eof` is true when the production completes only
   at the end of input.
-- `inline`: whether the grammar declares the variable inline.
-- `subtypes`: present exactly when the variable is a supertype: its subtypes as `node-types.json` lists them,
-  `{ "type", "named" }` in the same order, computed by the same code.
-
-Every `auxiliary` variable is a repetition, including a hidden rule whose body is a top-level repeat (which also stops
-being inlined). For a repetition, `rule` and `productions` describe one element: the variable stands for one or more of
+Every auxiliary variable Tree-sitter generates is a `repetition`, and so is a hidden rule whose body is a top-level
+repeat (which also stops being inlined). For a repetition, `rule` and `productions` describe one element: the variable stands for one or more of
 them, joined by invisible binary subtrees. The generator checks that the variable has exactly one binary
 `[self, self]` production before leaving it out. An element that matches nothing (a repeat of an empty `choice`) is
 written as an empty `choice`, with no productions.
@@ -93,7 +99,7 @@ For example, from the JSON grammar, where `pair` is `seq(field('key', $._key), '
 ```json
 {
   "name": "pair",
-  "kind": "named",
+  "form": "named",
   "rule": { "type": "seq", "members": [
     { "type": "metadata", "field": "key", "is_token": false, "is_main_token": false,
       "content": { "type": "symbol", "symbol": { "kind": "non_terminal", "index": 5 } } },
@@ -101,7 +107,6 @@ For example, from the JSON grammar, where `pair` is `seq(field('key', $._key), '
     { "type": "metadata", "field": "value", "is_token": false, "is_main_token": false,
       "content": { "type": "symbol", "symbol": { "kind": "non_terminal", "index": 1 } } }
   ] },
-  "inline": false,
   "productions": [ { "steps": [
     { "symbol": { "kind": "non_terminal", "index": 5 }, "field": "key" },
     { "symbol": { "kind": "terminal", "index": 3 } },
@@ -115,12 +120,11 @@ and the repetition behind `object`'s `commaSep(...)`, whose element is a comma f
 ```json
 {
   "name": "object_repeat1",
-  "kind": "auxiliary",
+  "form": "repetition",
   "rule": { "type": "seq", "members": [
     { "type": "symbol", "symbol": { "kind": "terminal", "index": 1 } },
     { "type": "symbol", "symbol": { "kind": "non_terminal", "index": 3 } }
   ] },
-  "inline": false,
   "productions": [ { "steps": [
     { "symbol": { "kind": "terminal", "index": 1 } },
     { "symbol": { "kind": "non_terminal", "index": 3 } }

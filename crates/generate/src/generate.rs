@@ -36,7 +36,7 @@ mod tables;
 pub use build_tables::ParseTableBuilderError;
 use build_tables::build_tables;
 #[cfg(feature = "load")]
-pub use contract::ContractError;
+pub use contract::{ContractError, IllegalForm};
 use grammars::{InlinedProductionMap, LexicalGrammar, SyntaxGrammar};
 pub use node_types::{InvalidSupertypeError, SuperTypeCycleError, VariableInfoError};
 pub use parse_grammar::ParseGrammarError;
