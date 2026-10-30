@@ -26,6 +26,9 @@ in the user guide.
 - `src/grammar.json` contains a structured representation of the grammar; can be used to regenerate the parser without having
 to re-evaluate the `grammar.js`.
 - `src/node-types.json` provides type information about individual syntax nodes; see the section on [`Static Node Types`](../using-parsers/6-static-node-types.md).
+- `src/grammar-contract.json`, only with `--grammar-contract` (an addition of this fork), states the prepared grammar the
+parser was generated from: every variable's rule tree and final productions, checked against each other by the generator;
+see the section on [`The Grammar Contract`](../using-parsers/8-grammar-contract.md).
 
 
 ## Options
@@ -42,6 +45,12 @@ The ABI to use for parser generation. The default is ABI 15, with ABI 14 being a
 ### `--no-parser`
 
 Only generate `grammar.json` and `node-types.json`
+
+### `--grammar-contract`
+
+Also write `grammar-contract.json`, the prepared grammar as a contract (an addition of this fork; see
+[`The Grammar Contract`](../using-parsers/8-grammar-contract.md)). It is written with or without `--no-parser`, and
+nothing else `generate` writes changes.
 
 ### `-o/--output`
 

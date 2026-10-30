@@ -33,7 +33,7 @@ use tree_sitter_cli::{
     wasm,
 };
 use tree_sitter_config::Config;
-use tree_sitter_generate::{Diagnostic, GenerateError, OptLevel};
+use tree_sitter_generate::{Diagnostic, GenerateError, GrammarContract, OptLevel};
 use tree_sitter_highlight::Highlighter;
 use tree_sitter_loader::{self as loader, Bindings, TreeSitterJSON};
 use tree_sitter_tags::TagsContext;
@@ -114,6 +114,10 @@ struct Generate {
     /// Only generate `grammar.json` and `node-types.json`
     #[arg(long)]
     pub no_parser: bool,
+    /// Also write `grammar-contract.json`, the prepared grammar as a contract (this fork's
+    /// addition; see FORK.md)
+    #[arg(long)]
+    pub grammar_contract: bool,
     /// Deprecated: use the `build` command
     #[arg(long, short = 'b')]
     pub build: bool,
@@ -971,6 +975,11 @@ impl Generate {
                 OptLevel::empty()
             } else {
                 OptLevel::default()
+            },
+            if self.grammar_contract {
+                GrammarContract::Write
+            } else {
+                GrammarContract::Omit
             },
             &mut diagnostics,
         );

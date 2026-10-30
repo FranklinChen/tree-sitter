@@ -32,7 +32,7 @@ pub enum PrecedenceEntry {
 }
 
 /// The parsed grammar.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct InputGrammar {
     pub pool: RulePool,
     pub name: StrId,

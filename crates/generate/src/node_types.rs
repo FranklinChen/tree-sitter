@@ -838,6 +838,28 @@ fn supertype_subtype_refs(
     subtypes
 }
 
+/// The subtypes `node-types.json` lists for a supertype, as (name, named)
+/// pairs in its order: the same computation the node-types writer uses.
+#[cfg(feature = "load")]
+pub fn supertype_subtypes<'a>(
+    info: &VariableInfo,
+    syntax_grammar: &SyntaxGrammar,
+    lexical_grammar: &LexicalGrammar,
+    default_aliases: &AliasMap,
+    str_pool: &'a StrPool,
+) -> Vec<(&'a str, bool)> {
+    supertype_subtype_refs(
+        info,
+        syntax_grammar,
+        lexical_grammar,
+        default_aliases,
+        str_pool,
+    )
+    .into_iter()
+    .map(|t| (str_pool.resolve(t.kind), t.named))
+    .collect()
+}
+
 /// Add one JSON entry per supertype and build the supertype-to-subtypes map.
 #[cfg(feature = "load")]
 fn build_supertype_entries(

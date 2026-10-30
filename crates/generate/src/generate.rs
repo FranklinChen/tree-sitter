@@ -18,6 +18,8 @@ use thiserror::Error;
 
 mod bitvec;
 mod build_tables;
+#[cfg(feature = "load")]
+mod contract;
 mod dedup;
 mod grammars;
 mod nfa;
@@ -33,6 +35,8 @@ mod tables;
 
 pub use build_tables::ParseTableBuilderError;
 use build_tables::build_tables;
+#[cfg(feature = "load")]
+pub use contract::ContractError;
 use grammars::{InlinedProductionMap, LexicalGrammar, SyntaxGrammar};
 pub use node_types::{InvalidSupertypeError, SuperTypeCycleError, VariableInfoError};
 pub use parse_grammar::ParseGrammarError;
@@ -99,6 +103,20 @@ pub enum GenerateError {
     ParseVersion(#[from] ParseVersionError),
     #[error(transparent)]
     SuperTypeCycle(#[from] SuperTypeCycleError),
+    #[cfg(feature = "load")]
+    #[error(transparent)]
+    Contract(#[from] ContractError),
+}
+
+/// Whether `generate_parser_in_directory` also writes `src/grammar-contract.json`
+/// (this fork's addition; see `FORK.md`).
+#[cfg(feature = "load")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GrammarContract {
+    /// Write the outputs upstream writes, and nothing else.
+    Omit,
+    /// Also write the grammar contract, prepared separately from the parser.
+    Write,
 }
 
 #[derive(Debug, Error)]
@@ -333,6 +351,7 @@ pub fn generate_parser_in_directory<T, U, V>(
     js_runtime: Option<&str>,
     generate_parser: bool,
     optimizations: OptLevel,
+    grammar_contract: GrammarContract,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> GenerateResult<()>
 where
@@ -394,11 +413,20 @@ where
 
     // If our job is only to generate `grammar.json` and not `parser.c`, stop here.
     let input_grammar = parse_grammar(&grammar_json, diagnostics)?;
+    // The contract is prepared from its own copy of the grammar, after the
+    // upstream outputs are generated (so a grammar upstream refuses is refused
+    // the same way) and before anything is written.
+    let contract_input = match grammar_contract {
+        GrammarContract::Omit => None,
+        GrammarContract::Write => Some(input_grammar.clone()),
+    };
 
     if !generate_parser {
         let node_types_json =
             generate_node_types_from_grammar(input_grammar, diagnostics)?.node_types_json;
+        let contract_json = grammar_contract_json(contract_input)?;
         write_file(&src_path.join("node-types.json"), node_types_json)?;
+        write_contract(&src_path, contract_json)?;
         return Ok(());
     }
 
@@ -416,15 +444,34 @@ where
         optimizations,
         diagnostics,
     )?;
+    let contract_json = grammar_contract_json(contract_input)?;
 
     write_file(&src_path.join("parser.c"), c_code)?;
     write_file(&src_path.join("node-types.json"), node_types_json)?;
+    write_contract(&src_path, contract_json)?;
     fs::create_dir_all(&header_path)
         .map_err(|e| GenerateError::IO(IoError::new(e, Some(header_path.as_path()))))?;
     write_file(&header_path.join("alloc.h"), ALLOC_HEADER)?;
     write_file(&header_path.join("array.h"), ARRAY_HEADER)?;
     write_file(&header_path.join("parser.h"), PARSER_HEADER)?;
 
+    Ok(())
+}
+
+/// The grammar contract of `input`, when one was asked for.
+#[cfg(feature = "load")]
+fn grammar_contract_json(input: Option<InputGrammar>) -> GenerateResult<Option<String>> {
+    Ok(input
+        .map(contract::generate_grammar_contract_json)
+        .transpose()?)
+}
+
+/// Write the grammar contract into `src_path`, if one was generated.
+#[cfg(feature = "load")]
+fn write_contract(src_path: &Path, contract_json: Option<String>) -> GenerateResult<()> {
+    if let Some(json) = contract_json {
+        write_file(&src_path.join("grammar-contract.json"), json)?;
+    }
     Ok(())
 }
 

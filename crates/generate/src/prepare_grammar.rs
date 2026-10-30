@@ -1,3 +1,5 @@
+#[cfg(feature = "load")]
+mod contract_structure;
 mod expand_repeats;
 mod expand_tokens;
 mod extract_default_aliases;
@@ -13,6 +15,10 @@ use std::{
     mem,
 };
 
+#[cfg(feature = "load")]
+pub use contract_structure::{
+    ContractStructure, ProductionKey, StepKey, StructureError, StructuredRule, VariableStructure,
+};
 pub use expand_tokens::ExpandTokensError;
 pub use extract_tokens::ExtractTokensError;
 #[cfg(test)] // TODO: Is this defined in the proper place?
@@ -21,6 +27,8 @@ pub use flatten_grammar::FlattenGrammarError;
 use indexmap::IndexMap;
 pub use intern_symbols::InternSymbolsError;
 pub use process_inlines::ProcessInlinesError;
+#[cfg(feature = "load")]
+pub use process_inlines::{MissingInlineExpansion, final_productions};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -34,7 +42,7 @@ pub use self::expand_tokens::expand_tokens;
 use self::{
     expand_repeats::{ExpandRepeatsError, expand_repeats},
     extract_default_aliases::extract_default_aliases,
-    extract_tokens::extract_tokens,
+    extract_tokens::{ExtractedGrammarMeta, extract_tokens},
     flatten_grammar::flatten_grammar,
     intern_symbols::intern_symbols,
     process_inlines::process_inlines,
@@ -112,9 +120,32 @@ pub struct PreparedGrammar {
 /// Transform an input grammar into separate components that are ready
 /// for parse table construction.
 pub fn prepare_grammar(
-    mut g: InputGrammar,
+    g: InputGrammar,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> PrepareGrammarResult<PreparedGrammar> {
+    prepare_grammar_capturing(g, diagnostics, |_, _| ()).map(|(prepared, ())| prepared)
+}
+
+/// [`prepare_grammar`], also capturing the rule trees the grammar contract
+/// publishes, with their flattened paths. The capture's own failure is
+/// returned beside the prepared grammar, never as a preparation error, so
+/// preparation fails exactly as it would without it.
+#[cfg(feature = "load")]
+pub fn prepare_grammar_with_structure(
+    g: InputGrammar,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> PrepareGrammarResult<(PreparedGrammar, Result<ContractStructure, StructureError>)> {
+    prepare_grammar_capturing(g, diagnostics, contract_structure::structured_rules)
+}
+
+/// The preparation passes, with `capture` given the grammar and token
+/// metadata as they stand just after flattening (rule trees intact,
+/// productions not yet inlined).
+fn prepare_grammar_capturing<R>(
+    mut g: InputGrammar,
+    diagnostics: &mut Vec<Diagnostic>,
+    capture: impl FnOnce(&InputGrammar, &ExtractedGrammarMeta) -> R,
+) -> PrepareGrammarResult<(PreparedGrammar, R)> {
     validate_precedences(&g)?;
 
     let interned_meta = intern_symbols(&mut g, diagnostics)?;
@@ -125,6 +156,7 @@ pub fn prepare_grammar(
     let mut out = ProductionStore::default();
     flatten_grammar(&g, &ext_meta, &mut state, &mut out)?;
     validate_indirect_recursion(&g, &out)?;
+    let captured = capture(&g, &ext_meta);
 
     let lexical_grammar = expand_tokens(
         &mut g.pool,
@@ -136,13 +168,16 @@ pub fn prepare_grammar(
     let inlines = process_inlines(&g, &ext_meta, &mut out)?;
 
     let (syntax_grammar, str_pool) = assemble_syntax_grammar(g, ext_meta, out);
-    Ok(PreparedGrammar {
-        syntax_grammar,
-        lexical_grammar,
-        inlines,
-        default_aliases,
-        str_pool,
-    })
+    Ok((
+        PreparedGrammar {
+            syntax_grammar,
+            lexical_grammar,
+            inlines,
+            default_aliases,
+            str_pool,
+        },
+        captured,
+    ))
 }
 
 /// Check for indirect recursion cycles in the grammar that can cause infinite loops while

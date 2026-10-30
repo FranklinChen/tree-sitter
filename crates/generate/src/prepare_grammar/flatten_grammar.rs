@@ -104,6 +104,13 @@ pub(super) struct FlattenState {
 }
 
 impl FlattenState {
+    /// The steps of the path just enumerated, as `flatten_variable` hands it
+    /// to its caller (an `eof()` is a step on `Symbol::end()`).
+    #[cfg(feature = "load")]
+    pub(super) fn path_steps(&self) -> &[ProductionStep] {
+        &self.steps
+    }
+
     fn reset_variable(&mut self) {
         self.choices.reset();
         self.reset_path();
@@ -278,7 +285,7 @@ fn emit_ready(
 }
 
 /// Enumerate every live path through the rule tree `root`, calling `on_path`
-/// with the state after each one.
+/// with the state after each one (`FlattenState::path_steps` holds its steps).
 /// A path through an empty choice is dead and skipped.
 pub(super) fn flatten_variable(
     pool: &RulePool,

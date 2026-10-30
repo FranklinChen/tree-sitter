@@ -4,6 +4,8 @@ use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+#[cfg(feature = "load")]
+use crate::grammars::SyntaxGrammar;
 use crate::{
     grammars::{InlinedProductionMap, InputGrammar, Production, ProductionStep, ProductionStore},
     prepare_grammar::extract_tokens::ExtractedGrammarMeta,
@@ -170,7 +172,8 @@ impl InlineSteps for InlineBuilder<'_> {
 /// Expand every inlined step of `prod_id`, calling `finished` with each
 /// production it becomes, in the order the walk reaches their ends (never,
 /// when every expansion was dropped). `worklist` is scratch, empty between
-/// calls.
+/// calls. The one walk both building the inline map and reporting a
+/// variable's final productions use, so the two cannot disagree.
 fn walk_inlined_productions(
     source: &mut impl InlineSteps,
     prod_id: u32,
@@ -196,6 +199,102 @@ fn walk_inlined_productions(
             }
         }
     }
+}
+
+/// A finished inline map over the prepared grammar: the walk's lookups, with
+/// every expansion already recorded by the builder.
+#[cfg(feature = "load")]
+struct FinishedInlines<'a> {
+    steps: &'a [ProductionStep],
+    productions: &'a [Production],
+    inline: &'a [Symbol],
+    map: &'a InlinedProductionMap,
+    /// The first step the builder never expanded, if the walk met one.
+    missing: Option<(u32, u32)>,
+}
+
+#[cfg(feature = "load")]
+impl InlineSteps for FinishedInlines<'_> {
+    fn step(&self, prod_id: u32, step_index: u32) -> Option<ProductionStep> {
+        let p = self.productions[prod_id as usize];
+        (step_index < p.steps_len).then(|| self.steps[(p.steps_start + step_index) as usize])
+    }
+
+    fn is_inlined(&self, symbol: Symbol) -> bool {
+        self.inline.contains(&symbol)
+    }
+
+    fn expand(&mut self, prod_id: u32, step_index: u32) -> Vec<u32> {
+        // The builder expanded every inlined step it reached from every
+        // original production, which is every step this walk can reach; a
+        // missing entry is recorded, never read as "every expansion dropped".
+        self.map
+            .map
+            .get(&(prod_id, step_index))
+            .cloned()
+            .unwrap_or_else(|| {
+                self.missing.get_or_insert((prod_id, step_index));
+                Vec::new()
+            })
+    }
+}
+
+/// An inlined step the finished map does not cover: an internal invariant of
+/// the inlining pass, reported rather than read as a dropped production.
+#[cfg(feature = "load")]
+#[derive(Debug, Error, Serialize, Deserialize, PartialEq, Eq)]
+#[error("Internal error: production {production} step {step} is inlined but was never expanded")]
+pub struct MissingInlineExpansion {
+    pub production: u32,
+    pub step: u32,
+}
+
+/// The productions original production `prod_id` becomes after inlining, for
+/// reporting the prepared grammar. Uses the same walk as building the map.
+///
+/// # Errors
+///
+/// [`MissingInlineExpansion`] if the walk reaches an inlined step the map
+/// does not cover.
+#[cfg(feature = "load")]
+pub fn final_productions(
+    grammar: &SyntaxGrammar,
+    map: &InlinedProductionMap,
+    prod_id: u32,
+) -> Result<Vec<u32>, MissingInlineExpansion> {
+    final_productions_in(
+        &grammar.steps,
+        &grammar.productions,
+        &grammar.variables_to_inline,
+        map,
+        prod_id,
+    )
+}
+
+#[cfg(feature = "load")]
+fn final_productions_in(
+    steps: &[ProductionStep],
+    productions: &[Production],
+    inline: &[Symbol],
+    map: &InlinedProductionMap,
+    prod_id: u32,
+) -> Result<Vec<u32>, MissingInlineExpansion> {
+    let mut finished = FinishedInlines {
+        steps,
+        productions,
+        inline,
+        map,
+        missing: None,
+    };
+    let mut productions = Vec::new();
+    walk_inlined_productions(&mut finished, prod_id, &mut Vec::new(), |id| {
+        productions.push(id);
+    });
+    finished
+        .missing
+        .map_or(Ok(productions), |(production, step)| {
+            Err(MissingInlineExpansion { production, step })
+        })
 }
 
 pub type ProcessInlinesResult<T> = Result<T, ProcessInlinesError>;
@@ -273,6 +372,97 @@ mod tests {
         prepare_grammar::extract_tokens::LexicalToken,
         rules::{Alias, Associativity, RulePool, Symbol},
     };
+
+    #[test]
+    #[cfg(feature = "load")]
+    fn test_final_productions_expand_every_inlined_step() {
+        // The grammar of `test_nested_inlining`: var0 inlines nt1 (which
+        // itself inlines nt3) and nt2. Its final productions are the two
+        // fully expanded sequences, in the order the walk finishes them.
+        let mut out = ProductionStore::default();
+        add_variable(
+            &mut out,
+            &[(
+                vec![
+                    plain(Symbol::terminal(10)),
+                    plain(Symbol::non_terminal(1)),
+                    plain(Symbol::terminal(11)),
+                    plain(Symbol::non_terminal(2)),
+                    plain(Symbol::terminal(12)),
+                ],
+                0,
+            )],
+        );
+        add_variable(
+            &mut out,
+            &[
+                (vec![plain(Symbol::terminal(13))], 0),
+                (
+                    vec![plain(Symbol::non_terminal(3)), plain(Symbol::terminal(14))],
+                    0,
+                ),
+            ],
+        );
+        add_variable(&mut out, &[(vec![plain(Symbol::terminal(15))], 0)]);
+        add_variable(&mut out, &[(vec![plain(Symbol::terminal(16))], 0)]);
+        let inline = vec![
+            Symbol::non_terminal(1),
+            Symbol::non_terminal(2),
+            Symbol::non_terminal(3),
+        ];
+        let meta = ExtractedGrammarMeta {
+            inline: inline.clone(),
+            ..Default::default()
+        };
+        let map = process_inlines(&InputGrammar::default(), &meta, &mut out).unwrap();
+        let ids = final_productions_in(
+            &out.steps,
+            &out.productions,
+            &inline,
+            &map,
+            out.var_prods[0].0,
+        )
+        .unwrap();
+        let sequences = ids
+            .iter()
+            .map(|&id| out.steps[out.productions[id as usize].step_range()].to_vec())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sequences,
+            vec![
+                vec![
+                    plain(Symbol::terminal(10)),
+                    plain(Symbol::terminal(13)),
+                    plain(Symbol::terminal(11)),
+                    plain(Symbol::terminal(15)),
+                    plain(Symbol::terminal(12)),
+                ],
+                vec![
+                    plain(Symbol::terminal(10)),
+                    plain(Symbol::terminal(16)),
+                    plain(Symbol::terminal(14)),
+                    plain(Symbol::terminal(11)),
+                    plain(Symbol::terminal(15)),
+                    plain(Symbol::terminal(12)),
+                ],
+            ]
+        );
+        // A step the map never covered is an error, not a dropped production.
+        let empty = InlinedProductionMap::default();
+        assert_eq!(
+            final_productions_in(
+                &out.steps,
+                &out.productions,
+                &inline,
+                &empty,
+                out.var_prods[0].0
+            ),
+            Err(MissingInlineExpansion {
+                production: out.var_prods[0].0,
+                step: 1
+            })
+        );
+    }
 
     #[test]
     fn test_basic_inlining() {

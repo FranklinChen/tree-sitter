@@ -16,6 +16,7 @@
     - [API](./using-parsers/queries/4-api.md)
   - [Static Node Types](./using-parsers/6-static-node-types.md)
   - [ABI versions](./using-parsers/7-abi-versions.md)
+  - [The Grammar Contract](./using-parsers/8-grammar-contract.md)
 - [Creating Parsers](./creating-parsers/index.md)
   - [Getting Started](./creating-parsers/1-getting-started.md)
   - [The Grammar DSL](./creating-parsers/2-the-grammar-dsl.md)
