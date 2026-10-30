@@ -42,10 +42,22 @@ compared=("parser.c" "node-types.json" "grammar.json" "tree_sitter/parser.h" "tr
 identical=0
 refused_both=0
 
-# same_refusal LOG_A DIR_A LOG_B DIR_B: the logs match once each names its
-# own directory as one token.
+# normalized_log LOG DIR: LOG with its own directory written as one token and
+# node's per-process prefix (`(node:<pid>)`, on its warnings) without the
+# process id, the two parts of a refusal that differ from run to run.
+normalized_log() {
+    sed -e "s#$2#DIR#g" -e 's/(node:[0-9][0-9]*)/(node:PID)/g' "$1"
+}
+
+# same_refusal LOG_A DIR_A LOG_B DIR_B: the logs match once normalized. When
+# they do not, the difference is printed (at most 40 lines), so a run that
+# fails says why.
 same_refusal() {
-    cmp -s <(sed "s#$2#DIR#g" "$1") <(sed "s#$4#DIR#g" "$3")
+    if cmp -s <(normalized_log "$1" "$2") <(normalized_log "$3" "$4"); then
+        return 0
+    fi
+    diff <(normalized_log "$1" "$2") <(normalized_log "$3" "$4") | head -n 40 || true
+    return 1
 }
 
 # compare NAME GRAMMAR_JSON: generate from GRAMMAR_JSON with upstream's CLI
