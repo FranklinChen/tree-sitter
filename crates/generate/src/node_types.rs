@@ -817,6 +817,27 @@ fn collect_extra_node_types(
         .collect()
 }
 
+/// The subtypes `node-types.json` lists for a supertype whose child info is
+/// `info`: each child type as a node type, sorted and deduplicated.
+#[cfg(feature = "load")]
+fn supertype_subtype_refs(
+    info: &VariableInfo,
+    syntax_grammar: &SyntaxGrammar,
+    lexical_grammar: &LexicalGrammar,
+    default_aliases: &AliasMap,
+    str_pool: &StrPool,
+) -> Vec<NodeTypeRef> {
+    let mut subtypes = info
+        .children
+        .types
+        .iter()
+        .map(|t| child_type_to_node_type(t, syntax_grammar, lexical_grammar, default_aliases))
+        .collect::<Vec<_>>();
+    sort_node_type_refs(&mut subtypes, str_pool);
+    subtypes.dedup();
+    subtypes
+}
+
 /// Add one JSON entry per supertype and build the supertype-to-subtypes map.
 #[cfg(feature = "load")]
 fn build_supertype_entries(
@@ -850,14 +871,13 @@ fn build_supertype_entries(
                 children: None,
                 subtypes: None,
             });
-        let mut subtypes = info
-            .children
-            .types
-            .iter()
-            .map(|t| child_type_to_node_type(t, syntax_grammar, lexical_grammar, default_aliases))
-            .collect::<Vec<_>>();
-        sort_node_type_refs(&mut subtypes, str_pool);
-        subtypes.dedup();
+        let subtypes = supertype_subtype_refs(
+            info,
+            syntax_grammar,
+            lexical_grammar,
+            default_aliases,
+            str_pool,
+        );
         let supertype = NodeTypeRef {
             kind: node_type_json.kind,
             named: true,

@@ -33,25 +33,7 @@ impl InlineBuilder<'_> {
         let mut worklist = Vec::new();
         for prod_id in 0..self.first_inlined {
             let mut survived = false;
-            worklist.push((prod_id, 0u32));
-            while !worklist.is_empty() {
-                let mut i = 0;
-                while i < worklist.len() {
-                    let (prod_id, step_index) = worklist[i];
-                    if let Some(step) = self.production_step_for_id(prod_id, step_index) {
-                        if self.inline.contains(&step.symbol()) {
-                            let ids = self.inline_production_at_step(prod_id, step_index);
-                            worklist.splice(i..=i, ids.into_iter().map(|id| (id, step_index)));
-                        } else {
-                            worklist[i].1 += 1;
-                            i += 1;
-                        }
-                    } else {
-                        worklist.remove(i);
-                        survived = true;
-                    }
-                }
-            }
+            walk_inlined_productions(&mut self, prod_id, &mut worklist, |_| survived = true);
             if !survived {
                 dead.insert(prod_id);
             }
@@ -160,6 +142,59 @@ impl InlineBuilder<'_> {
     fn production_step_for_id(&self, prod_id: u32, step: u32) -> Option<ProductionStep> {
         let p = self.out.productions[prod_id as usize];
         (step < p.steps_len).then(|| self.out.steps[(p.steps_start + step) as usize])
+    }
+}
+
+/// What the inlining walk needs: the step at a position, whether its symbol is
+/// inlined, and the productions that replace it there.
+trait InlineSteps {
+    fn step(&self, prod_id: u32, step_index: u32) -> Option<ProductionStep>;
+    fn is_inlined(&self, symbol: Symbol) -> bool;
+    fn expand(&mut self, prod_id: u32, step_index: u32) -> Vec<u32>;
+}
+
+impl InlineSteps for InlineBuilder<'_> {
+    fn step(&self, prod_id: u32, step_index: u32) -> Option<ProductionStep> {
+        self.production_step_for_id(prod_id, step_index)
+    }
+
+    fn is_inlined(&self, symbol: Symbol) -> bool {
+        self.inline.contains(&symbol)
+    }
+
+    fn expand(&mut self, prod_id: u32, step_index: u32) -> Vec<u32> {
+        self.inline_production_at_step(prod_id, step_index)
+    }
+}
+
+/// Expand every inlined step of `prod_id`, calling `finished` with each
+/// production it becomes, in the order the walk reaches their ends (never,
+/// when every expansion was dropped). `worklist` is scratch, empty between
+/// calls.
+fn walk_inlined_productions(
+    source: &mut impl InlineSteps,
+    prod_id: u32,
+    worklist: &mut Vec<(u32, u32)>,
+    mut finished: impl FnMut(u32),
+) {
+    worklist.push((prod_id, 0u32));
+    while !worklist.is_empty() {
+        let mut i = 0;
+        while i < worklist.len() {
+            let (prod_id, step_index) = worklist[i];
+            if let Some(step) = source.step(prod_id, step_index) {
+                if source.is_inlined(step.symbol()) {
+                    let ids = source.expand(prod_id, step_index);
+                    worklist.splice(i..=i, ids.into_iter().map(|id| (id, step_index)));
+                } else {
+                    worklist[i].1 += 1;
+                    i += 1;
+                }
+            } else {
+                worklist.remove(i);
+                finished(prod_id);
+            }
+        }
     }
 }
 
