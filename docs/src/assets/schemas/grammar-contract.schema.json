@@ -1,0 +1,397 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Grammar contract (this fork's addition; format tree-sitter-contract-fork/grammar-contract/1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "variables",
+    "terminals",
+    "external_tokens",
+    "extras",
+    "word_token",
+    "default_aliases"
+  ],
+  "properties": {
+    "format": {
+      "const": "tree-sitter-contract-fork/grammar-contract/1"
+    },
+    "variables": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Variable"
+      }
+    },
+    "terminals": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Terminal"
+      }
+    },
+    "external_tokens": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Token"
+      }
+    },
+    "extras": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/SymbolRef"
+      }
+    },
+    "word_token": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/SymbolRef"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "default_aliases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "symbol",
+          "alias"
+        ],
+        "properties": {
+          "symbol": {
+            "$ref": "#/definitions/SymbolRef"
+          },
+          "alias": {
+            "$ref": "#/definitions/Alias"
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "Kind": {
+      "enum": [
+        "named",
+        "anonymous",
+        "hidden",
+        "auxiliary"
+      ]
+    },
+    "SymbolRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "index"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "terminal",
+            "non_terminal",
+            "external",
+            "end",
+            "end_of_non_terminal_extra"
+          ]
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "Alias": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "named"
+      ],
+      "properties": {
+        "value": {
+          "type": "string"
+        },
+        "named": {
+          "type": "boolean"
+        }
+      }
+    },
+    "Token": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/Kind"
+        }
+      }
+    },
+    "Terminal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind",
+        "rule"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/Kind"
+        },
+        "rule": {
+          "$ref": "#/definitions/Rule"
+        }
+      }
+    },
+    "Variable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind",
+        "rule",
+        "inline",
+        "productions"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/Kind"
+        },
+        "rule": {
+          "$ref": "#/definitions/Rule"
+        },
+        "inline": {
+          "type": "boolean"
+        },
+        "productions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Production"
+          }
+        },
+        "subtypes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "named"
+            ],
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "named": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    "Production": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "steps",
+        "requires_eof"
+      ],
+      "properties": {
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "symbol"
+            ],
+            "properties": {
+              "symbol": {
+                "$ref": "#/definitions/SymbolRef"
+              },
+              "alias": {
+                "$ref": "#/definitions/Alias"
+              },
+              "field": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "requires_eof": {
+          "type": "boolean"
+        }
+      }
+    },
+    "Rule": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "blank",
+                "eof"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "symbol"
+          ],
+          "properties": {
+            "type": {
+              "const": "symbol"
+            },
+            "symbol": {
+              "$ref": "#/definitions/SymbolRef"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value",
+            "flags"
+          ],
+          "properties": {
+            "type": {
+              "const": "pattern"
+            },
+            "value": {
+              "type": "string"
+            },
+            "flags": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "name"
+          ],
+          "properties": {
+            "type": {
+              "const": "named_symbol"
+            },
+            "name": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "members"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "seq",
+                "choice"
+              ]
+            },
+            "members": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Rule"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "content"
+          ],
+          "properties": {
+            "type": {
+              "const": "repeat"
+            },
+            "content": {
+              "$ref": "#/definitions/Rule"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "is_token",
+            "is_main_token",
+            "content"
+          ],
+          "properties": {
+            "type": {
+              "const": "metadata"
+            },
+            "alias": {
+              "$ref": "#/definitions/Alias"
+            },
+            "field": {
+              "type": "string"
+            },
+            "is_token": {
+              "type": "boolean"
+            },
+            "is_main_token": {
+              "type": "boolean"
+            },
+            "content": {
+              "$ref": "#/definitions/Rule"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
