@@ -32,6 +32,12 @@
 //! Every symbol is referenced as `{ "kind", "index" }` into the array its
 //! kind names (`variables`, `terminals`, `external_tokens`), exactly as the
 //! generator numbers them, so names never have to be matched.
+//!
+//! A variable's kind, inlining and supertype membership are three separate
+//! facts in the generator, but only six combinations of them occur. The
+//! contract states the combination as one `form`, decided by
+//! [`variable_form`], so a consumer never meets a combination Tree-sitter does
+//! not build.
 
 use std::hash::BuildHasherDefault;
 
@@ -54,7 +60,7 @@ use crate::{
 
 /// The contract's format: whose format it is, and its version. Changed on any
 /// change a consumer must know.
-const CONTRACT_FORMAT: &str = "tree-sitter-contract-fork/grammar-contract/1";
+const CONTRACT_FORMAT: &str = "tree-sitter-contract-fork/grammar-contract/2";
 
 /// Why the contract could not be written.
 #[derive(Debug, Error, Serialize, Deserialize)]
@@ -82,6 +88,16 @@ pub enum ContractError {
     )]
     AuxiliaryStructure(String),
     #[error(
+        "Internal error: variable `{variable}` is {form}, which Tree-sitter refuses before the \
+         contract is written"
+    )]
+    VariableForm { variable: String, form: IllegalForm },
+    #[error(
+        "Internal error: external token `{0}` is auxiliary; Tree-sitter gives an external token \
+         the visibility of its spelling"
+    )]
+    AuxiliaryExternal(String),
+    #[error(
         "Internal error: the lexical grammar has {lexical} terminals but {sources} source \
          trees, or their names differ at index {index}"
     )]
@@ -99,7 +115,7 @@ struct Contract<'a> {
     format: &'static str,
     variables: Vec<VariableEntry<'a>>,
     terminals: Vec<TerminalEntry<'a>>,
-    external_tokens: Vec<TokenEntry<'a>>,
+    external_tokens: Vec<ExternalTokenEntry<'a>>,
     extras: Vec<SymbolRef>,
     word_token: Option<SymbolRef>,
     default_aliases: Vec<DefaultAlias<'a>>,
@@ -108,17 +124,84 @@ struct Contract<'a> {
 #[derive(Serialize)]
 struct VariableEntry<'a> {
     name: &'a str,
-    kind: Kind,
+    #[serde(flatten)]
+    form: VariableForm<'a>,
     /// The rule tree just before flattening, inline references spliced; for
     /// a repetition, the repeated element alone.
     rule: RuleEntry<'a>,
-    inline: bool,
     /// The final productions, each once; for a repetition, the elements'.
     productions: Vec<ProductionEntry<'a>>,
-    /// Present exactly for a supertype: its subtypes as `node-types.json`
-    /// lists them (same computation, same order).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    subtypes: Option<Vec<NodeTypeEntry<'a>>>,
+}
+
+/// What a variable is: one variant for each combination of kind, inlining and
+/// supertype membership that Tree-sitter builds, written as `"form"`.
+#[derive(Serialize)]
+#[serde(tag = "form", rename_all = "snake_case")]
+enum VariableForm<'a> {
+    /// A visible node named by the variable.
+    Named,
+    /// A visible anonymous node.
+    Anonymous,
+    /// No node; its children are placed in its parent.
+    Hidden,
+    /// Hidden, and listed in the grammar's `supertypes`.
+    Supertype {
+        /// Its subtypes as `node-types.json` lists them (same computation,
+        /// same order).
+        subtypes: Vec<NodeTypeEntry<'a>>,
+    },
+    /// Listed in the grammar's `inline`: replaced by its productions wherever
+    /// it is referenced, so it never produces a node.
+    Inline,
+    /// An auxiliary variable, which is always a repetition: one or more of
+    /// its element.
+    Repetition,
+}
+
+/// A combination of a variable's kind, inlining and supertype membership that
+/// names no form.
+///
+/// Tree-sitter rules out each before the contract is written:
+/// a supertype entry for an inline rule is dropped and every supertype is made
+/// hidden (`intern_symbols`), a hidden rule that becomes a repetition leaves
+/// `inline` and no generated repetition is ever in it (`expand_repeats`), and a
+/// supertype must have a single visible child, which a repetition never has
+/// (`node_types`).
+#[derive(Debug, Error, Serialize, Deserialize)]
+pub enum IllegalForm {
+    #[error("both inline and a supertype")]
+    InlineSupertype,
+    #[error("a visible supertype")]
+    VisibleSupertype,
+    #[error("an inline repetition")]
+    InlineRepetition,
+    #[error("a repetition and a supertype")]
+    RepetitionSupertype,
+}
+
+/// The form of a variable of `kind`, inlined or not, with `subtypes` exactly
+/// when it is a supertype.
+fn variable_form(
+    kind: VariableType,
+    inline: bool,
+    subtypes: Option<Vec<NodeTypeEntry<'_>>>,
+) -> Result<VariableForm<'_>, IllegalForm> {
+    match (kind, inline, subtypes) {
+        (_, true, Some(_)) => Err(IllegalForm::InlineSupertype),
+        (VariableType::Named | VariableType::Anonymous, false, Some(_)) => {
+            Err(IllegalForm::VisibleSupertype)
+        }
+        (VariableType::Auxiliary, true, None) => Err(IllegalForm::InlineRepetition),
+        (VariableType::Auxiliary, false, Some(_)) => Err(IllegalForm::RepetitionSupertype),
+        (VariableType::Hidden, false, Some(subtypes)) => Ok(VariableForm::Supertype { subtypes }),
+        (VariableType::Named | VariableType::Anonymous | VariableType::Hidden, true, None) => {
+            Ok(VariableForm::Inline)
+        }
+        (VariableType::Auxiliary, false, None) => Ok(VariableForm::Repetition),
+        (VariableType::Named, false, None) => Ok(VariableForm::Named),
+        (VariableType::Anonymous, false, None) => Ok(VariableForm::Anonymous),
+        (VariableType::Hidden, false, None) => Ok(VariableForm::Hidden),
+    }
 }
 
 /// A node type as `node-types.json` names one.
@@ -130,9 +213,32 @@ struct NodeTypeEntry<'a> {
 }
 
 #[derive(Serialize)]
-struct TokenEntry<'a> {
+struct ExternalTokenEntry<'a> {
     name: &'a str,
-    kind: Kind,
+    kind: ExternalKind,
+}
+
+/// An external token's visibility. Tree-sitter derives it from the token's
+/// spelling alone (`intern_symbols`: a name is named, or hidden when it starts
+/// with `_`; a string is anonymous), so unlike a terminal it is never
+/// auxiliary.
+#[derive(Serialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum ExternalKind {
+    Named,
+    Anonymous,
+    Hidden,
+}
+
+/// The visibility of an external token of `kind`; none exactly for
+/// `Auxiliary`, which Tree-sitter never gives an external token.
+const fn external_kind(kind: VariableType) -> Option<ExternalKind> {
+    match kind {
+        VariableType::Named => Some(ExternalKind::Named),
+        VariableType::Anonymous => Some(ExternalKind::Anonymous),
+        VariableType::Hidden => Some(ExternalKind::Hidden),
+        VariableType::Auxiliary => None,
+    }
 }
 
 #[derive(Serialize)]
@@ -410,11 +516,13 @@ fn contract_json(
         external_tokens: syntax_grammar
             .external_tokens
             .iter()
-            .map(|t| TokenEntry {
-                name: pool.resolve(t.name),
-                kind: kind(t.kind),
+            .map(|t| {
+                let name = pool.resolve(t.name);
+                external_kind(t.kind)
+                    .map(|kind| ExternalTokenEntry { name, kind })
+                    .ok_or_else(|| ContractError::AuxiliaryExternal(name.to_string()))
             })
-            .collect(),
+            .collect::<Result<_, _>>()?,
         extras: syntax_grammar
             .extra_symbols
             .iter()
@@ -495,27 +603,10 @@ impl<'a> Writer<'a> {
             });
         }
 
-        let rule_entry = match variable.kind {
-            // The tree has exactly one binary sequence, and the proof put its
-            // path among the productions; it is stated by the kind instead.
-            VariableType::Auxiliary => {
-                let element = repeated_element(&structure.rule, as_symbol)
-                    .ok_or_else(|| ContractError::AuxiliaryStructure(name()))?;
-                keys.retain(|k| !is_binary(k, as_symbol));
-                rule(&element, pool)
-            }
-            VariableType::Named | VariableType::Anonymous | VariableType::Hidden => {
-                rule(&structure.rule, pool)
-            }
-        };
-        let is_supertype = syntax_grammar.supertype_symbols.contains(&as_symbol);
-        Ok(VariableEntry {
-            name: pool.resolve(variable.name),
-            kind: kind(variable.kind),
-            rule: rule_entry,
-            inline: syntax_grammar.variables_to_inline.contains(&as_symbol),
-            productions: keys.iter().map(|k| production(k, pool)).collect(),
-            subtypes: is_supertype.then(|| {
+        let subtypes = syntax_grammar
+            .supertype_symbols
+            .contains(&as_symbol)
+            .then(|| {
                 supertype_subtypes(
                     &self.variable_info[index],
                     syntax_grammar,
@@ -526,7 +617,36 @@ impl<'a> Writer<'a> {
                 .into_iter()
                 .map(|(kind, named)| NodeTypeEntry { kind, named })
                 .collect()
-            }),
+            });
+        let form = variable_form(
+            variable.kind,
+            syntax_grammar.variables_to_inline.contains(&as_symbol),
+            subtypes,
+        )
+        .map_err(|form| ContractError::VariableForm {
+            variable: name(),
+            form,
+        })?;
+        let rule_entry = match form {
+            // The tree has exactly one binary sequence, and the proof put its
+            // path among the productions; it is stated by the form instead.
+            VariableForm::Repetition => {
+                let element = repeated_element(&structure.rule, as_symbol)
+                    .ok_or_else(|| ContractError::AuxiliaryStructure(name()))?;
+                keys.retain(|k| !is_binary(k, as_symbol));
+                rule(&element, pool)
+            }
+            VariableForm::Named
+            | VariableForm::Anonymous
+            | VariableForm::Hidden
+            | VariableForm::Supertype { .. }
+            | VariableForm::Inline => rule(&structure.rule, pool),
+        };
+        Ok(VariableEntry {
+            name: pool.resolve(variable.name),
+            form,
+            rule: rule_entry,
+            productions: keys.iter().map(|k| production(k, pool)).collect(),
         })
     }
 
@@ -570,8 +690,14 @@ impl<'a> Writer<'a> {
 mod tests {
     use serde_json::{Value, json};
 
-    use super::{ContractError, contract_json, generate_grammar_contract_json};
-    use crate::{parse_grammar::parse_grammar, prepare_grammar::prepare_grammar_with_structure};
+    use super::{
+        ContractError, IllegalForm, NodeTypeEntry, contract_json, external_kind,
+        generate_grammar_contract_json, variable_form,
+    };
+    use crate::{
+        grammars::VariableType, parse_grammar::parse_grammar,
+        prepare_grammar::prepare_grammar_with_structure,
+    };
 
     fn contract(grammar: &Value) -> Value {
         let mut diagnostics = Vec::new();
@@ -646,20 +772,19 @@ mod tests {
         // without its binary production.
         let aux_index = steps[0]["symbol"]["index"].as_u64().unwrap() as usize;
         let aux = &contract["variables"][aux_index];
-        assert_eq!(aux["kind"], "auxiliary");
+        assert_eq!(aux["form"], "repetition");
         assert_eq!(productions(aux).len(), 1);
 
         // A hidden rule whose body is a top-level repeat becomes a repetition
-        // itself and is no longer inline.
-        let run = variable(&contract, "_run");
-        assert_eq!(run["kind"], "auxiliary");
-        assert_eq!(run["inline"], false);
+        // itself, which is never inline.
+        assert_eq!(variable(&contract, "_run")["form"], "repetition");
 
         // Subtypes are present exactly for a supertype.
         let value = variable(&contract, "_value");
+        assert_eq!(value["form"], "supertype");
         assert_eq!(value["subtypes"].as_array().unwrap().len(), 2, "{value:?}");
         assert!(source.get("subtypes").is_none());
-        assert_eq!(variable(&contract, "inlined")["inline"], true);
+        assert_eq!(variable(&contract, "inlined")["form"], "inline");
     }
 
     #[test]
@@ -724,7 +849,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|v| v["kind"] == "auxiliary")
+            .find(|v| v["form"] == "repetition")
             .unwrap();
         assert_eq!(aux["rule"], json!({ "type": "choice", "members": [] }));
         assert_eq!(productions(aux).len(), 0, "{aux:?}");
@@ -792,6 +917,39 @@ mod tests {
             ),
             "{refused:?}"
         );
+    }
+
+    #[test]
+    fn test_combinations_tree_sitter_does_not_build_have_no_form() {
+        // The forms Tree-sitter does build are checked end to end, through
+        // the contract, by the first test.
+        let subtypes = || Some(Vec::<NodeTypeEntry>::new());
+        assert!(matches!(
+            variable_form(VariableType::Hidden, true, subtypes()),
+            Err(IllegalForm::InlineSupertype)
+        ));
+        assert!(matches!(
+            variable_form(VariableType::Named, false, subtypes()),
+            Err(IllegalForm::VisibleSupertype)
+        ));
+        assert!(matches!(
+            variable_form(VariableType::Anonymous, false, subtypes()),
+            Err(IllegalForm::VisibleSupertype)
+        ));
+        assert!(matches!(
+            variable_form(VariableType::Auxiliary, true, None),
+            Err(IllegalForm::InlineRepetition)
+        ));
+        assert!(matches!(
+            variable_form(VariableType::Auxiliary, false, subtypes()),
+            Err(IllegalForm::RepetitionSupertype)
+        ));
+    }
+
+    #[test]
+    fn test_an_external_token_is_never_auxiliary() {
+        assert!(external_kind(VariableType::Hidden).is_some());
+        assert!(external_kind(VariableType::Auxiliary).is_none());
     }
 
     #[test]
