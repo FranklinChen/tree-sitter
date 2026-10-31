@@ -57,7 +57,7 @@ grammar among Tree-sitter's fixtures has this shape.
 
 ## Commits
 
-On top of `v0.27.1`, six commits, by subject:
+On top of `v0.27.1`, seven commits, by subject:
 
 1. `refactor(generate): factor out flattening's path enumeration, inlining's walk and supertype subtypes`: no change of
    behavior or output; three upstream loops become functions the contract can share. A conflict here, when adopting a
@@ -73,6 +73,9 @@ On top of `v0.27.1`, six commits, by subject:
 6. `feat(generate)!: state each variable's form as one value (contract format 2)`: format 1 wrote a variable's kind,
    inlining and subtypes as three fields, which admitted combinations Tree-sitter never builds; format 2 writes the
    combination as one `form`, and an external token's `kind` without the `auxiliary` Tree-sitter never gives one.
+7. `ci: compare acceptance refusals without backtraces`: CI's Rust setup sets `RUST_BACKTRACE`, and a backtrace lists
+   the frames of the binary that refused, which differ between the fork's debug build and upstream's release build;
+   acceptance now runs every CLI with backtraces off.
 
 ## How it has been verified
 

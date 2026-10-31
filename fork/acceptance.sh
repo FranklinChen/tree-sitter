@@ -30,6 +30,13 @@ work=$3
 repo=$(cd "$(dirname "$0")/.." && pwd)
 fixtures="$repo/test/fixtures"
 
+# A refusal is compared by its message. A Rust backtrace, which the CLI
+# appends when RUST_BACKTRACE or RUST_LIB_BACKTRACE asks for one (CI's Rust
+# setup turns it on), lists the stack frames of the binary that refused, and
+# those depend on how it was built (a debug build keeps frames a release build
+# inlines away), not on what was refused. Every run here asks for none.
+export RUST_BACKTRACE=0 RUST_LIB_BACKTRACE=0
+
 if [ ! -d "$fixtures/grammars/json/src" ]; then
     printf 'fetched fixtures are missing; run: cargo xtask fetch-fixtures\n' >&2
     exit 2
