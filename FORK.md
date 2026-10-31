@@ -57,7 +57,7 @@ grammar among Tree-sitter's fixtures has this shape.
 
 ## Commits
 
-On top of `v0.27.1`, seven commits, by subject:
+On top of `v0.27.1`, eight commits, by subject:
 
 1. `refactor(generate): factor out flattening's path enumeration, inlining's walk and supertype subtypes`: no change of
    behavior or output; three upstream loops become functions the contract can share. A conflict here, when adopting a
@@ -76,12 +76,16 @@ On top of `v0.27.1`, seven commits, by subject:
 7. `ci: compare acceptance refusals without backtraces`: CI's Rust setup sets `RUST_BACKTRACE`, and a backtrace lists
    the frames of the binary that refused, which differ between the fork's debug build and upstream's release build;
    acceptance now runs every CLI with backtraces off.
+8. `feat(generate)!: list the node kinds (contract format 3)`: the contract states every node kind, as `node-types.json`
+   lists them and computed by the same code, so a consumer never re-derives which visible rules and tokens are nodes of
+   their own name (one every reference renames is not). The one addition to `node_types.rs` is a `node_kinds` helper
+   beside `supertype_subtypes`.
 
 ## How it has been verified
 
 As of 2026-10-30, on this series:
 
-- **Generator tests and lints.** `cargo test -p tree-sitter-generate --lib` (93 tests, among them the proof's negative
+- **Generator tests and lints.** `cargo test -p tree-sitter-generate --lib` (94 tests, among them the proof's negative
   control, which removes one path from a tree and expects the refusal, and regression tests for every defect the reviews
   found), `cargo clippy -p tree-sitter-generate --all-targets -- -D warnings`, `cargo clippy -p tree-sitter-cli -- -D
   warnings`, and a build with `--no-default-features`.
@@ -94,8 +98,8 @@ As of 2026-10-30, on this series:
 - **The schema.** All 77 contracts validate against the JSON schema (`check-jsonschema` 0.39.0), which rejects a field
   of the earlier format.
 - **Tree-sitter's own suite.** `cargo xtask fetch-fixtures`, `cargo xtask generate-fixtures`, `cargo xtask test`.
-  412 passed, 0 failed, 1 ignored, including the corpus tests of every fixture language (404 before the contract; the
-  eight added are the generator's new tests).
+  413 passed, 0 failed, 1 ignored, including the corpus tests of every fixture language (404 before the contract; the
+  nine added are the generator's new tests).
 - **Size and cost.** On the fixture grammars the contract is 3-17 times the size of `node-types.json` and at most a fifth
   of `parser.c`; with `--no-parser`, preparing it adds about 0.2 seconds to the largest grammar in a debug build.
 
@@ -109,8 +113,8 @@ Not done:
   does not touch the runtime library or the Wasm bindings.
 
 A published contract format is never changed in place: any change a consumer must know about is a new version of the
-format string. Format 1 was published with the first four commits and is superseded by format 2; a consumer reading
-format 1 pins a commit before the sixth.
+format string. Format 1 was published with the first four commits, format 2 with the sixth, and format 3 with the
+eighth; a consumer pins the commit whose format it reads.
 
 ## Continuous integration
 

@@ -28,20 +28,21 @@ Tree-sitter writes.
 - **Symbols are numbers, not names.** Every symbol is written as `{ "kind": ..., "index": ... }`, an index into the array
   its kind names, exactly as the generator numbers it. No consumer has to match names.
 - **It is versioned.** `format` names the format and its version. A published version is never changed; any change a
-  consumer must know about is a new version. This page describes `tree-sitter-contract-fork/grammar-contract/2`, whose
+  consumer must know about is a new version. This page describes `tree-sitter-contract-fork/grammar-contract/3`, whose
   JSON schema is `docs/src/assets/schemas/grammar-contract.schema.json`.
 
 ## Top level
 
 ```json
 {
-  "format": "tree-sitter-contract-fork/grammar-contract/2",
+  "format": "tree-sitter-contract-fork/grammar-contract/3",
   "variables": [ ... ],
   "terminals": [ ... ],
   "external_tokens": [ ... ],
   "extras": [ ... ],
   "word_token": null,
-  "default_aliases": [ ... ]
+  "default_aliases": [ ... ],
+  "node_kinds": [ ... ]
 }
 ```
 
@@ -54,6 +55,10 @@ Tree-sitter writes.
 - `default_aliases`: `{ "symbol": ..., "alias": { "value": ..., "named": ... } }` for every symbol that never appears
   unaliased in a production. The runtime applies such an alias everywhere the symbol appears, including inside `ERROR`
   nodes; in the contract's own productions and rule trees it is already written on each step.
+- `node_kinds`: every kind of node a tree can contain, named and anonymous, as `{ "type", "named" }` exactly as
+  `node-types.json` lists them, computed by the same code and in the same order. It answers which kinds exist, which the
+  rest of the contract states only indirectly: a visible rule or token that every reference renames (one with a default
+  alias) is never a node of its own name, so it is listed only under its alias.
 
 A terminal's or external token's `kind` is its visibility: `named` and `anonymous` tokens are nodes; `hidden` ones are
 not, and neither are `auxiliary` terminals, which are tokens Tree-sitter extracted from a rule. An external token is
