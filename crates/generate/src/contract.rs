@@ -48,7 +48,10 @@ use thiserror::Error;
 
 use crate::{
     grammars::{InputGrammar, VariableType},
-    node_types::{VariableInfo, VariableInfoError, get_variable_info, supertype_subtypes},
+    node_types::{
+        SuperTypeCycleError, VariableInfo, VariableInfoError, get_variable_info, node_kinds,
+        supertype_subtypes,
+    },
     prepare_grammar::{
         ContractStructure, MissingInlineExpansion, PrepareGrammarError, PreparedGrammar,
         ProductionKey, StepKey, StructureError, StructuredRule, VariableStructure,
@@ -60,7 +63,7 @@ use crate::{
 
 /// The contract's format: whose format it is, and its version. Changed on any
 /// change a consumer must know.
-const CONTRACT_FORMAT: &str = "tree-sitter-contract-fork/grammar-contract/2";
+const CONTRACT_FORMAT: &str = "tree-sitter-contract-fork/grammar-contract/3";
 
 /// Why the contract could not be written.
 #[derive(Debug, Error, Serialize, Deserialize)]
@@ -69,6 +72,8 @@ pub enum ContractError {
     Prepare(#[from] PrepareGrammarError),
     #[error(transparent)]
     VariableInfo(#[from] VariableInfoError),
+    #[error(transparent)]
+    NodeTypes(#[from] SuperTypeCycleError),
     #[error(transparent)]
     Structure(#[from] StructureError),
     #[error(transparent)]
@@ -119,6 +124,9 @@ struct Contract<'a> {
     extras: Vec<SymbolRef>,
     word_token: Option<SymbolRef>,
     default_aliases: Vec<DefaultAlias<'a>>,
+    /// Every node kind, named and anonymous, exactly as `node-types.json`
+    /// lists them (same computation, same order).
+    node_kinds: Vec<NodeTypeEntry<'a>>,
 }
 
 #[derive(Serialize)]
@@ -538,6 +546,16 @@ fn contract_json(
                 alias: alias(a, pool),
             })
             .collect(),
+        node_kinds: node_kinds(
+            syntax_grammar,
+            &prepared.lexical_grammar,
+            &prepared.default_aliases,
+            &variable_info,
+            pool,
+        )?
+        .into_iter()
+        .map(|(kind, named)| NodeTypeEntry { kind, named })
+        .collect(),
     };
     serde_json::to_string(&contract).map_err(|e| ContractError::Serialize(e.to_string()))
 }
@@ -694,6 +712,7 @@ mod tests {
         ContractError, IllegalForm, NodeTypeEntry, contract_json, external_kind,
         generate_grammar_contract_json, variable_form,
     };
+    use crate::node_types::{generate_node_types_json, get_variable_info};
     use crate::{
         grammars::VariableType, parse_grammar::parse_grammar,
         prepare_grammar::prepare_grammar_with_structure,
@@ -917,6 +936,67 @@ mod tests {
             ),
             "{refused:?}"
         );
+    }
+
+    /// The (type, named) pairs `node-types.json` lists for `grammar`, in its
+    /// order, from the writer `generate` uses.
+    fn listed_node_types(grammar: &Value) -> Vec<Value> {
+        let mut diagnostics = Vec::new();
+        let input = parse_grammar(&grammar.to_string(), &mut diagnostics).unwrap();
+        let (prepared, _) = prepare_grammar_with_structure(input, &mut diagnostics).unwrap();
+        let info = get_variable_info(
+            &prepared.syntax_grammar,
+            &prepared.lexical_grammar,
+            &prepared.default_aliases,
+            &prepared.str_pool,
+        )
+        .unwrap();
+        let json = generate_node_types_json(
+            &prepared.syntax_grammar,
+            &prepared.lexical_grammar,
+            &prepared.default_aliases,
+            &info,
+            &prepared.str_pool,
+        )
+        .unwrap();
+        serde_json::from_str::<Vec<Value>>(&json)
+            .unwrap()
+            .iter()
+            .map(|node| json!({ "type": node["type"], "named": node["named"] }))
+            .collect()
+    }
+
+    #[test]
+    fn test_node_kinds_are_the_kinds_node_types_lists() {
+        // `inner` is renamed at its only reference, so it gets a default alias
+        // and no node carries its own name: listed as `outer`, never `inner`.
+        let grammar = json!({
+            "name": "renamed",
+            "rules": {
+                "source": { "type": "SEQ", "members": [
+                    { "type": "ALIAS", "value": "outer", "named": true,
+                      "content": { "type": "SYMBOL", "name": "inner" } },
+                    { "type": "SYMBOL", "name": "_value" }
+                ]},
+                "inner": { "type": "SEQ", "members": [
+                    { "type": "STRING", "value": "a" }, { "type": "STRING", "value": "b" }
+                ]},
+                "_value": { "type": "CHOICE", "members": [
+                    { "type": "SYMBOL", "name": "number" }, { "type": "SYMBOL", "name": "word" }
+                ]},
+                "number": { "type": "PATTERN", "value": "\\d+" },
+                "word": { "type": "PATTERN", "value": "[a-z]+" }
+            },
+            "supertypes": ["_value"]
+        });
+        let kinds = contract(&grammar)["node_kinds"].as_array().unwrap().clone();
+        assert_eq!(kinds, listed_node_types(&grammar));
+        let names: Vec<&str> = kinds.iter().filter_map(|k| k["type"].as_str()).collect();
+        assert!(
+            names.contains(&"outer") && !names.contains(&"inner"),
+            "{names:?}"
+        );
+        assert!(names.contains(&"_value"), "{names:?}");
     }
 
     #[test]
