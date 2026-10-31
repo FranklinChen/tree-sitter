@@ -63,7 +63,7 @@ use crate::{
 
 /// The contract's format: whose format it is, and its version. Changed on any
 /// change a consumer must know.
-const CONTRACT_FORMAT: &str = "tree-sitter-contract-fork/grammar-contract/3";
+const CONTRACT_FORMAT: &str = "tree-sitter-contract-fork/grammar-contract/4";
 
 /// Why the contract could not be written.
 #[derive(Debug, Error, Serialize, Deserialize)]
@@ -118,6 +118,9 @@ pub enum ContractError {
 #[derive(Serialize)]
 struct Contract<'a> {
     format: &'static str,
+    /// The grammar's name, as `grammar.json` states it and the parser's
+    /// `tree_sitter_<name>` function is named.
+    name: &'a str,
     variables: Vec<VariableEntry<'a>>,
     terminals: Vec<TerminalEntry<'a>>,
     external_tokens: Vec<ExternalTokenEntry<'a>>,
@@ -490,13 +493,16 @@ pub fn generate_grammar_contract_json(
     input_grammar: InputGrammar,
 ) -> Result<String, ContractError> {
     let mut repeated_diagnostics = Vec::new();
+    let name = input_grammar.pool.resolve(input_grammar.name).to_string();
     let (prepared, structure) =
         prepare_grammar_with_structure(input_grammar, &mut repeated_diagnostics)?;
-    contract_json(&prepared, &structure?)
+    contract_json(&name, &prepared, &structure?)
 }
 
-/// The contract of a prepared grammar whose rule trees are `structure`.
+/// The contract of the grammar `name`, prepared, whose rule trees are
+/// `structure`.
 fn contract_json(
+    name: &str,
     prepared: &PreparedGrammar,
     structure: &ContractStructure,
 ) -> Result<String, ContractError> {
@@ -514,6 +520,7 @@ fn contract_json(
     let pool = &prepared.str_pool;
     let contract = Contract {
         format: CONTRACT_FORMAT,
+        name,
         variables: structure
             .variables
             .iter()
@@ -767,6 +774,7 @@ mod tests {
         });
         let contract = contract(&grammar);
         assert_eq!(contract["format"], super::CONTRACT_FORMAT);
+        assert_eq!(contract["name"], "contract_probe");
 
         // `source` has two productions, because `repeat` is zero or more: one
         // with the auxiliary repeat step and one without. In the first, the
@@ -1052,7 +1060,7 @@ mod tests {
         let paths = &mut structure.variables[0].paths;
         let removed = paths.iter().next().cloned().unwrap();
         paths.remove(&removed);
-        let refused = contract_json(&prepared, &structure);
+        let refused = contract_json("tampered", &prepared, &structure);
         assert!(
             matches!(
                 refused,

@@ -1,10 +1,11 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Grammar contract (this fork's addition; format tree-sitter-contract-fork/grammar-contract/3)",
+  "title": "Grammar contract (this fork's addition; format tree-sitter-contract-fork/grammar-contract/4)",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "format",
+    "name",
     "variables",
     "terminals",
     "external_tokens",
@@ -15,7 +16,10 @@
   ],
   "properties": {
     "format": {
-      "const": "tree-sitter-contract-fork/grammar-contract/3"
+      "const": "tree-sitter-contract-fork/grammar-contract/4"
+    },
+    "name": {
+      "type": "string"
     },
     "variables": {
       "type": "array",

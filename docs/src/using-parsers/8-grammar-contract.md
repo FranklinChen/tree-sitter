@@ -28,14 +28,15 @@ Tree-sitter writes.
 - **Symbols are numbers, not names.** Every symbol is written as `{ "kind": ..., "index": ... }`, an index into the array
   its kind names, exactly as the generator numbers it. No consumer has to match names.
 - **It is versioned.** `format` names the format and its version. A published version is never changed; any change a
-  consumer must know about is a new version. This page describes `tree-sitter-contract-fork/grammar-contract/3`, whose
+  consumer must know about is a new version. This page describes `tree-sitter-contract-fork/grammar-contract/4`, whose
   JSON schema is `docs/src/assets/schemas/grammar-contract.schema.json`.
 
 ## Top level
 
 ```json
 {
-  "format": "tree-sitter-contract-fork/grammar-contract/3",
+  "format": "tree-sitter-contract-fork/grammar-contract/4",
+  "name": "json",
   "variables": [ ... ],
   "terminals": [ ... ],
   "external_tokens": [ ... ],
@@ -46,6 +47,7 @@ Tree-sitter writes.
 }
 ```
 
+- `name`: the grammar's name, as `grammar.json` states it and the parser's `tree_sitter_<name>` function is named.
 - `variables`: the syntax variables (`"kind": "non_terminal"` symbols), in the generator's order.
 - `terminals`: the lexical variables (`"kind": "terminal"` symbols), in the generator's order.
 - `external_tokens`: the external tokens (`"kind": "external"` symbols), in the grammar's order. Each has `name` and
