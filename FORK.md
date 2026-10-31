@@ -57,7 +57,7 @@ grammar among Tree-sitter's fixtures has this shape.
 
 ## Commits
 
-On top of `v0.27.1`, eight commits, by subject:
+On top of `v0.27.1`, nine commits, by subject:
 
 1. `refactor(generate): factor out flattening's path enumeration, inlining's walk and supertype subtypes`: no change of
    behavior or output; three upstream loops become functions the contract can share. A conflict here, when adopting a
@@ -80,6 +80,8 @@ On top of `v0.27.1`, eight commits, by subject:
    lists them and computed by the same code, so a consumer never re-derives which visible rules and tokens are nodes of
    their own name (one every reference renames is not). The one addition to `node_types.rs` is a `node_kinds` helper
    beside `supertype_subtypes`.
+9. `feat(generate)!: state the grammar's name (contract format 4)`: the contract names its grammar, so a consumer that
+   checks which grammar a file belongs to needs nothing beside the contract.
 
 ## How it has been verified
 
@@ -113,8 +115,8 @@ Not done:
   does not touch the runtime library or the Wasm bindings.
 
 A published contract format is never changed in place: any change a consumer must know about is a new version of the
-format string. Format 1 was published with the first four commits, format 2 with the sixth, and format 3 with the
-eighth; a consumer pins the commit whose format it reads.
+format string. Format 1 was published with the first four commits, format 2 with the sixth, format 3 with the eighth,
+and format 4 with the ninth; a consumer pins the commit whose format it reads.
 
 ## Continuous integration
 
