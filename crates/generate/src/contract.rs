@@ -63,7 +63,7 @@ use crate::{
 
 /// The contract's format: whose format it is, and its version. Changed on any
 /// change a consumer must know.
-const CONTRACT_FORMAT: &str = "tree-sitter-contract-fork/grammar-contract/4";
+const CONTRACT_FORMAT: &str = "tree-sitter-contract-fork/grammar-contract/5";
 
 /// Why the contract could not be written.
 #[derive(Debug, Error, Serialize, Deserialize)]
@@ -121,6 +121,8 @@ struct Contract<'a> {
     /// The grammar's name, as `grammar.json` states it and the parser's
     /// `tree_sitter_<name>` function is named.
     name: &'a str,
+    /// Runtime-reserved symbol names, from the same string pool as render.
+    builtin_symbol_names: Vec<&'a str>,
     variables: Vec<VariableEntry<'a>>,
     terminals: Vec<TerminalEntry<'a>>,
     external_tokens: Vec<ExternalTokenEntry<'a>>,
@@ -521,6 +523,7 @@ fn contract_json(
     let contract = Contract {
         format: CONTRACT_FORMAT,
         name,
+        builtin_symbol_names: vec![pool.resolve(StrPool::END_NAME_ID)],
         variables: structure
             .variables
             .iter()
@@ -972,6 +975,50 @@ mod tests {
             .iter()
             .map(|node| json!({ "type": node["type"], "named": node["named"] }))
             .collect()
+    }
+
+    #[test]
+    fn test_start_default_alias_is_the_root_kind_too() {
+        let grammar = json!({
+            "name": "root_alias",
+            "rules": {
+                "source": {"type": "SEQ", "members": [
+                    {"type": "STRING", "value": "a"},
+                    {"type": "CHOICE", "members": [
+                        {"type": "SYMBOL", "name": "nested"}, {"type": "BLANK"}
+                    ]}
+                ]},
+                "nested": {"type": "SEQ", "members": [
+                    {"type": "STRING", "value": "["},
+                    {"type": "ALIAS", "value": "inner", "named": true,
+                     "content": {"type": "SYMBOL", "name": "source"}},
+                    {"type": "STRING", "value": "]"}
+                ]}
+            }
+        });
+        let result = contract(&grammar);
+        let kinds = result["node_kinds"].as_array().unwrap();
+        assert!(kinds.iter().any(|kind| kind["type"] == "inner"));
+        assert!(!kinds.iter().any(|kind| kind["type"] == "source"));
+        assert_eq!(*kinds, listed_node_types(&grammar));
+        assert_eq!(result["builtin_symbol_names"], json!(["end"]));
+
+        // Contextual aliases need not become a default alias. The root then
+        // keeps its own name while nested sites expose both renamed kinds.
+        let mut contextual = grammar.clone();
+        contextual["rules"]["nested"] = json!({"type": "SEQ", "members": [
+            {"type": "STRING", "value": "["},
+            {"type": "ALIAS", "value": "left", "named": true,
+             "content": {"type": "SYMBOL", "name": "source"}},
+            {"type": "ALIAS", "value": "right", "named": true,
+             "content": {"type": "SYMBOL", "name": "source"}},
+            {"type": "STRING", "value": "]"}
+        ]});
+        let result = contract(&contextual);
+        let kinds = result["node_kinds"].as_array().unwrap();
+        for name in ["source", "left", "right"] {
+            assert!(kinds.iter().any(|kind| kind["type"] == name));
+        }
     }
 
     #[test]

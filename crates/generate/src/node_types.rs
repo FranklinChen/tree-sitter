@@ -552,10 +552,12 @@ fn get_aliases_by_symbol(
             }
         }
     }
-    aliases_by_symbol.insert(
-        Symbol::non_terminal(0),
-        std::iter::once(&None).copied().collect(),
-    );
+    // The start symbol uses its default alias in the runtime symbol table,
+    // just like a nested occurrence. Do not invent an unaliased root kind.
+    aliases_by_symbol
+        .entry(Symbol::non_terminal(0))
+        .or_default()
+        .insert(default_aliases.get(&Symbol::non_terminal(0)).copied());
     aliases_by_symbol
 }
 
