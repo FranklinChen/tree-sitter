@@ -862,8 +862,10 @@ pub fn supertype_subtypes<'a>(
     .collect()
 }
 
-/// Every node kind `node-types.json` lists, as (name, named) pairs in its
-/// order: the same computation the node-types writer uses.
+/// Every node kind `node-types.json` defines or references. Some inline
+/// aliases appear only in child/field references, so top-level entries alone
+/// are not a complete kind inventory. Definitions retain writer order;
+/// reference-only kinds follow in spelling order.
 #[cfg(feature = "load")]
 pub fn node_kinds<'a>(
     syntax_grammar: &SyntaxGrammar,
@@ -872,16 +874,45 @@ pub fn node_kinds<'a>(
     variable_info: &[VariableInfo],
     str_pool: &'a StrPool,
 ) -> SuperTypeCycleResult<Vec<(&'a str, bool)>> {
-    Ok(generate_node_types(
+    let nodes = generate_node_types(
         syntax_grammar,
         lexical_grammar,
         default_aliases,
         variable_info,
         str_pool,
-    )?
-    .into_iter()
-    .map(|node| (str_pool.resolve(node.kind), node.named))
-    .collect())
+    )?;
+    let mut kinds: Vec<_> = nodes
+        .iter()
+        .map(|node| NodeTypeRef {
+            kind: node.kind,
+            named: node.named,
+        })
+        .collect();
+    let mut seen: FxHashSet<_> = kinds.iter().copied().collect();
+    let mut references = Vec::new();
+    for node in &nodes {
+        if let Some(subtypes) = &node.subtypes {
+            references.extend(subtypes.iter().copied());
+        }
+        if let Some(children) = &node.children {
+            references.extend(children.types.iter().copied());
+        }
+        if let Some(fields) = &node.fields {
+            for field in fields.values() {
+                references.extend(field.types.iter().copied());
+            }
+        }
+    }
+    sort_node_type_refs(&mut references, str_pool);
+    for kind in references {
+        if seen.insert(kind) {
+            kinds.push(kind);
+        }
+    }
+    Ok(kinds
+        .into_iter()
+        .map(|kind| (str_pool.resolve(kind.kind), kind.named))
+        .collect())
 }
 
 /// Add one JSON entry per supertype and build the supertype-to-subtypes map.

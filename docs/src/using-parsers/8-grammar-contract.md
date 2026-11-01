@@ -54,6 +54,11 @@ and aliases. Version 5 also corrects the kind inventory for a default-aliased st
 variable: its root uses the alias, just as nested occurrences do. This changes the
 metadata inventory, not the generated parser's behavior.
 
+`node_kinds` includes both definitions and references in `node-types.json`.
+An inline alias can appear only in a child or field reference, so top-level
+entries alone are not a complete kind inventory. Definition order is retained;
+reference-only kinds follow in spelling order.
+
 - `name`: the grammar's name, as `grammar.json` states it and the parser's `tree_sitter_<name>` function is named.
 - `variables`: the syntax variables (`"kind": "non_terminal"` symbols), in the generator's order.
 - `terminals`: the lexical variables (`"kind": "terminal"` symbols), in the generator's order.
@@ -64,8 +69,8 @@ metadata inventory, not the generated parser's behavior.
 - `default_aliases`: `{ "symbol": ..., "alias": { "value": ..., "named": ... } }` for every symbol that never appears
   unaliased in a production. The runtime applies such an alias everywhere the symbol appears, including inside `ERROR`
   nodes; in the contract's own productions and rule trees it is already written on each step.
-- `node_kinds`: every kind of node a tree can contain, named and anonymous, as `{ "type", "named" }` exactly as
-  `node-types.json` lists them, computed by the same code and in the same order. It answers which kinds exist, which the
+- `node_kinds`: every defined or referenced kind in `node-types.json`, named and anonymous, as `{ "type", "named" }`.
+  Definitions retain writer order and reference-only kinds follow in spelling order. It answers which kinds exist, which the
   rest of the contract states only indirectly: a visible rule or token that every reference renames (one with a default
   alias) is never a node of its own name, so it is listed only under its alias.
 

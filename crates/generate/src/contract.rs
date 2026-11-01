@@ -129,8 +129,8 @@ struct Contract<'a> {
     extras: Vec<SymbolRef>,
     word_token: Option<SymbolRef>,
     default_aliases: Vec<DefaultAlias<'a>>,
-    /// Every node kind, named and anonymous, exactly as `node-types.json`
-    /// lists them (same computation, same order).
+    /// Every defined or referenced kind, including reference-only inline
+    /// aliases omitted from the top-level node-type entries.
     node_kinds: Vec<NodeTypeEntry<'a>>,
 }
 
@@ -1003,13 +1003,14 @@ mod tests {
         assert_eq!(*kinds, listed_node_types(&grammar));
         assert_eq!(result["builtin_symbol_names"], json!(["end"]));
 
-        // Contextual aliases need not become a default alias. The root then
-        // keeps its own name while nested sites expose both renamed kinds.
+        // A plain occurrence prevents a default alias. The root then keeps
+        // its own name while nested sites expose both contextual aliases.
         let mut contextual = grammar.clone();
         contextual["rules"]["nested"] = json!({"type": "SEQ", "members": [
             {"type": "STRING", "value": "["},
             {"type": "ALIAS", "value": "left", "named": true,
              "content": {"type": "SYMBOL", "name": "source"}},
+            {"type": "SYMBOL", "name": "source"},
             {"type": "ALIAS", "value": "right", "named": true,
              "content": {"type": "SYMBOL", "name": "source"}},
             {"type": "STRING", "value": "]"}
@@ -1018,6 +1019,25 @@ mod tests {
         let kinds = result["node_kinds"].as_array().unwrap();
         for name in ["source", "left", "right"] {
             assert!(kinds.iter().any(|kind| kind["type"] == name));
+        }
+    }
+
+    #[test]
+    fn test_reference_only_inline_aliases_are_kinds() {
+        let grammar = json!({"name":"inline_aliases", "inline":["_hidden"], "rules":{
+            "source":{"type":"SEQ", "members":[
+                {"type":"ALIAS", "value":"first", "named":true, "content":{"type":"SYMBOL", "name":"_hidden"}},
+                {"type":"ALIAS", "value":"second", "named":true, "content":{"type":"SYMBOL", "name":"_hidden"}},
+                {"type":"REPEAT", "content":{"type":"SYMBOL", "name":"numbers"}}
+            ]},
+            "_hidden":{"type":"PATTERN", "value":"[0-9]+"},
+            "numbers":{"type":"PREC", "value":1, "content":{"type":"REPEAT1", "content":{"type":"PATTERN", "value":"[0-9]+"}}},
+            "first":{"type":"PATTERN", "value":"[a-z]+"}
+        }});
+        let result = contract(&grammar);
+        let kinds = result["node_kinds"].as_array().unwrap();
+        for name in ["source", "first", "second"] {
+            assert!(kinds.iter().any(|kind| kind["type"] == name), "{result}");
         }
     }
 
