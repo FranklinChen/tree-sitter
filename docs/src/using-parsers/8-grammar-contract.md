@@ -16,13 +16,17 @@ itself computes, taken from the same preparation of the grammar that `node-types
 from. A consumer reads them instead of inferring them. Without the flag, `generate` writes exactly what upstream
 Tree-sitter writes.
 
+These generation guarantees are independent of the fork's empty-internal-token recovery repair, documented and
+qualified separately in `FORK.md`. That runtime repair does not change this contract's format.
+Selecting this generator does not change a consumer's separately selected Tree-sitter runtime dependency.
+
 ## Guarantees
 
 - **It is checked by the generator.** Each variable's `rule` (below) is a tree whose paths the generator enumerates with
   its own flattening code; they must be exactly the variable's final `productions`, step for step (symbol, alias, field)
   and in whether the production requires the end of input. If any variable differs, `generate` fails instead of writing
   the file.
-- **It changes nothing else.** The contract is prepared separately, after the parser and node types, and before any file
+- **The flag preserves generated artifacts.** The contract is prepared separately, after the parser and node types, and before any file
   is written. `parser.c`, `node-types.json`, `grammar.json` and the headers are byte-identical with and without the flag,
   and a grammar upstream refuses is refused with the same message.
 - **Symbols are numbers, not names.** Every symbol is written as `{ "kind": ..., "index": ... }`, an index into the array

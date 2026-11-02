@@ -128,6 +128,44 @@ typedef enum {
   ErrorComparisonTakeRight,
 } ErrorComparison;
 
+typedef enum {
+  LexingPhaseNormal,
+  LexingPhaseRecovery,
+} LexingPhase;
+
+typedef enum {
+  InternalLexNoMatch,
+  InternalLexAdvancing,
+  InternalLexEmpty,
+  InternalLexEndOfInput,
+} InternalLexObservation;
+
+static InternalLexObservation ts_parser__internal_token_observation(
+  TSSymbol symbol,
+  uint32_t total_bytes
+) {
+  if (symbol == ts_builtin_sym_end) return InternalLexEndOfInput;
+  return total_bytes > 0 ? InternalLexAdvancing : InternalLexEmpty;
+}
+
+// Nullable internal tokens can change the normal parse state, but skipping one
+// during recovery must advance the source. EOF is a distinct terminating event.
+static bool ts_parser__can_accept_internal_token(
+  InternalLexObservation observation,
+  LexingPhase phase
+) {
+  switch (observation) {
+    case InternalLexNoMatch:
+      return false;
+    case InternalLexAdvancing:
+    case InternalLexEndOfInput:
+      return true;
+    case InternalLexEmpty:
+      return phase == LexingPhaseNormal;
+  }
+  return false;
+}
+
 typedef struct {
   const char *string;
   uint32_t length;
@@ -484,6 +522,26 @@ static bool ts_parser__can_reuse_first_leaf(
   // the same thing happens when incrementally reparsing.
   if (current_lex_mode.lex_state == (uint16_t)(-1)) return false;
 
+  // A cached or reused empty internal token must obey the same recovery
+  // admission as a freshly lexed token, even when its lex mode is unchanged.
+  if (state == ERROR_STATE) {
+    // Recovery can break a reused parent down to this leaf. Later children
+    // must not lend it their width or their external-scanner provenance.
+    Subtree first_leaf = tree;
+    while (ts_subtree_child_count(first_leaf) > 0) {
+      first_leaf = ts_subtree_children(first_leaf)[0];
+    }
+    if (
+      !ts_subtree_has_external_tokens(first_leaf) &&
+      !ts_parser__can_accept_internal_token(
+        ts_parser__internal_token_observation(
+          ts_subtree_symbol(first_leaf), ts_subtree_total_bytes(first_leaf)
+        ),
+        LexingPhaseRecovery
+      )
+    ) return false;
+  }
+
   // If the token was created in a state with the same set of lookaheads, it is reusable.
   if (
     table_entry->action_count > 0 &&
@@ -502,6 +560,23 @@ static bool ts_parser__can_reuse_first_leaf(
   return current_lex_mode.external_lex_state == 0 && table_entry->is_reusable;
 }
 
+static InternalLexObservation ts_parser__lex_internal(
+  TSParser *self,
+  TSLexerMode lex_mode,
+  Length start_position,
+  uint32_t *lookahead_end_byte
+) {
+  ts_lexer_start(&self->lexer);
+  bool found_token = ts_parser__call_main_lex_fn(self, lex_mode);
+  ts_lexer_finish(&self->lexer, lookahead_end_byte);
+  if (!found_token) return InternalLexNoMatch;
+  uint32_t end_byte = self->lexer.token_end_position.bytes;
+  return ts_parser__internal_token_observation(
+    self->lexer.data.result_symbol,
+    end_byte > start_position.bytes ? end_byte - start_position.bytes : 0
+  );
+}
+
 static Subtree ts_parser__lex(
   TSParser *self,
   StackVersion version,
@@ -517,7 +592,7 @@ static Subtree ts_parser__lex(
   const Subtree external_token = ts_stack_last_external_token(self->stack, version);
 
   bool found_external_token = false;
-  bool error_mode = parse_state == ERROR_STATE;
+  LexingPhase phase = parse_state == ERROR_STATE ? LexingPhaseRecovery : LexingPhaseNormal;
   bool skipped_error = false;
   bool called_get_column = false;
   int32_t first_error_character = 0;
@@ -571,7 +646,7 @@ static Subtree ts_parser__lex(
           TSSymbol symbol = self->language->external_scanner.symbol_map[self->lexer.data.result_symbol];
           TSStateId next_parse_state = ts_language_next_state(self->language, parse_state, symbol);
           bool token_is_extra = (next_parse_state == parse_state);
-          if (error_mode || !ts_stack_has_advanced_since_error(self->stack, version) || token_is_extra) {
+          if (phase == LexingPhaseRecovery || !ts_stack_has_advanced_since_error(self->stack, version) || token_is_extra) {
             LOG(
               "ignore_empty_external_token symbol:%s",
               SYM_NAME(self->language->external_scanner.symbol_map[self->lexer.data.result_symbol])
@@ -596,13 +671,23 @@ static Subtree ts_parser__lex(
       current_position.extent.row,
       current_position.extent.column
     );
-    ts_lexer_start(&self->lexer);
-    found_token = ts_parser__call_main_lex_fn(self, lex_mode);
-    ts_lexer_finish(&self->lexer, &lookahead_end_byte);
-    if (found_token) break;
+    InternalLexObservation observation = ts_parser__lex_internal(
+      self, lex_mode, current_position, &lookahead_end_byte
+    );
+    if (ts_parser__can_accept_internal_token(observation, phase)) break;
 
-    if (!error_mode) {
-      error_mode = true;
+    if (observation == InternalLexEmpty) {
+      LOG("ignore_empty_internal_token symbol:%s", SYM_NAME(self->lexer.data.result_symbol));
+      // The lexer may have read beyond the empty match while trying a longer
+      // alternative. Recover from the original character, retaining lookahead
+      // evidence but not treating speculative reads as skipped source.
+      ts_lexer_reset(&self->lexer, current_position);
+      self->lexer.column_data = column_data;
+      ts_lexer_start(&self->lexer);
+    }
+
+    if (phase == LexingPhaseNormal) {
+      phase = LexingPhaseRecovery;
       lex_mode = ts_language_lex_mode_for_state(self->language, ERROR_STATE);
       ts_lexer_reset(&self->lexer, start_position);
       continue;

@@ -1716,6 +1716,311 @@ fn test_parsing_with_included_ranges_and_missing_tokens() {
 }
 
 #[test]
+fn test_empty_internal_tokens_make_progress_during_recovery() {
+    use serde_json::json;
+
+    enum ExpectedParse {
+        Valid,
+        Recovery(std::ops::Range<usize>),
+        Incomplete,
+    }
+
+    let surrounded = |middle| {
+        json!({
+            "type": "SEQ",
+            "members": [
+                {"type": "SYMBOL", "name": "a"},
+                middle,
+                {"type": "SYMBOL", "name": "b"}
+            ]
+        })
+    };
+    let fixtures = [
+        (
+            "nullable_recovery",
+            surrounded(json!({"type": "PATTERN", "value": "x*"})),
+            vec![
+                ("ab", ExpectedParse::Valid),
+                ("axxb", ExpectedParse::Valid),
+                ("a(note)b", ExpectedParse::Valid),
+                ("a!b", ExpectedParse::Recovery(1..2)),
+                ("aλb", ExpectedParse::Recovery(1..3)),
+                ("a\n!b", ExpectedParse::Recovery(1..3)),
+                ("a!", ExpectedParse::Recovery(1..2)),
+                ("a", ExpectedParse::Incomplete),
+                ("", ExpectedParse::Incomplete),
+            ],
+        ),
+        (
+            "nullable_lookahead_recovery",
+            surrounded(json!({"type": "PATTERN", "value": "(xy)*"})),
+            vec![
+                ("ab", ExpectedParse::Valid),
+                ("axyb", ExpectedParse::Valid),
+                ("ax!b", ExpectedParse::Recovery(1..3)),
+            ],
+        ),
+        (
+            "optional_recovery",
+            surrounded(json!({
+                "type": "CHOICE",
+                "members": [{"type": "PATTERN", "value": "x"}, {"type": "BLANK"}]
+            })),
+            vec![
+                ("ab", ExpectedParse::Valid),
+                ("axb", ExpectedParse::Valid),
+                ("a!b", ExpectedParse::Recovery(1..2)),
+                ("a", ExpectedParse::Incomplete),
+            ],
+        ),
+        (
+            "consuming_recovery",
+            surrounded(json!({
+                "type": "TOKEN",
+                "content": {
+                    "type": "SEQ",
+                    "members": [
+                        {"type": "PATTERN", "value": "x*"},
+                        {"type": "STRING", "value": "y"}
+                    ]
+                }
+            })),
+            vec![
+                ("ayb", ExpectedParse::Valid),
+                ("axxyb", ExpectedParse::Valid),
+                ("a!yb", ExpectedParse::Recovery(1..2)),
+                ("ay", ExpectedParse::Incomplete),
+            ],
+        ),
+        (
+            "quoted_nullable_recovery",
+            json!({
+                "type": "SEQ",
+                "members": [
+                    {"type": "STRING", "value": "\""},
+                    {"type": "PATTERN", "value": "x*"},
+                    {"type": "STRING", "value": "\""}
+                ]
+            }),
+            vec![
+                ("\"\"", ExpectedParse::Valid),
+                ("\"xxx\"", ExpectedParse::Valid),
+                ("\"!\"", ExpectedParse::Recovery(1..2)),
+                ("\"λ\"", ExpectedParse::Recovery(1..3)),
+                ("\"", ExpectedParse::Incomplete),
+            ],
+        ),
+    ];
+
+    for (name, root_rule, cases) in fixtures {
+        let grammar = json!({
+            "name": name,
+            "rules": {
+                "doc": root_rule,
+                "a": {"type": "STRING", "value": "a"},
+                "b": {"type": "STRING", "value": "b"},
+                "comment": {"type": "PATTERN", "value": "\\([^)]*\\)"}
+            },
+            "extras": [{"type": "SYMBOL", "name": "comment"}]
+        });
+        let (parser_name, parser_code) = generate_parser(&grammar.to_string()).unwrap();
+        let mut parser = Parser::new();
+        parser
+            .set_language(&get_test_language(&parser_name, &parser_code, None))
+            .unwrap();
+
+        for (source, expected) in cases {
+            // The old recovery loop reaches this cooperative cutoff instead
+            // of hanging the test process or growing its ERROR tree forever.
+            let mut polls = 0;
+            let parsed = parser.parse_with_options(
+                &mut |offset, _| source.as_bytes().get(offset..).unwrap_or_default(),
+                None,
+                Some(ParseOptions::new().progress_callback(&mut |_| {
+                    polls += 1;
+                    if polls >= 32 {
+                        ControlFlow::Break(())
+                    } else {
+                        ControlFlow::Continue(())
+                    }
+                })),
+            );
+            parser.reset();
+            let tree = parsed.unwrap_or_else(|| panic!("{name} did not finish on {source:?}"));
+            let root = tree.root_node();
+            assert_eq!(root.end_byte(), source.len(), "{name}: {source:?}");
+            match expected {
+                ExpectedParse::Valid => {
+                    assert!(!root.has_error(), "{name}: {source:?}: {}", root.to_sexp());
+                }
+                ExpectedParse::Recovery(range) => {
+                    assert!(root.has_error(), "{name}: {source:?}");
+                    let covering = root
+                        .descendant_for_byte_range(range.start, range.end)
+                        .unwrap();
+                    assert!(
+                        std::iter::successors(Some(covering), tree_sitter::Node::parent)
+                            .any(|node| node.is_error()),
+                        "{name}: {source:?}: unrecognized source must remain in an ERROR"
+                    );
+                }
+                ExpectedParse::Incomplete => {
+                    assert!(root.has_error(), "{name}: {source:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_empty_internal_first_leaf_recovery_after_edit() {
+    use serde_json::json;
+
+    struct PrefixReplacement {
+        before: &'static str,
+        after: &'static str,
+        unchanged_suffix: &'static str,
+    }
+
+    fn bounded_parse(
+        parser: &mut Parser,
+        source: &str,
+        old_tree: Option<&tree_sitter::Tree>,
+    ) -> tree_sitter::Tree {
+        let mut polls = 0;
+        let result = parser.parse_with_options(
+            &mut |offset, _| source.as_bytes().get(offset..).unwrap_or_default(),
+            old_tree,
+            Some(ParseOptions::new().progress_callback(&mut |_| {
+                polls += 1;
+                if polls >= 32 {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            })),
+        );
+        parser.reset();
+        result.unwrap_or_else(|| panic!("incremental recovery did not finish on {source:?}"))
+    }
+
+    fn node_ranges(node: tree_sitter::Node<'_>) -> Vec<(String, std::ops::Range<usize>)> {
+        let mut result = vec![(node.kind().to_owned(), node.byte_range())];
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            result.extend(node_ranges(child));
+        }
+        result
+    }
+
+    let grammar = json!({
+        "name": "incremental_nullable_recovery",
+        "rules": {
+            "doc": {
+                "type": "CHOICE",
+                "members": [
+                    {"type": "SEQ", "members": [
+                        {"type": "STRING", "value": "a"},
+                        {"type": "SYMBOL", "name": "container"}
+                    ]},
+                    {"type": "SEQ", "members": [
+                        {"type": "STRING", "value": "c"},
+                        {"type": "STRING", "value": "y"},
+                        {"type": "SYMBOL", "name": "container"}
+                    ]},
+                    {"type": "SEQ", "members": [
+                        {"type": "STRING", "value": "d"},
+                        {"type": "STRING", "value": "qqq"},
+                        {"type": "SYMBOL", "name": "container"}
+                    ]},
+                    {"type": "SEQ", "members": [
+                        {"type": "STRING", "value": "e"},
+                        {"type": "STRING", "value": "qqq"},
+                        {"type": "STRING", "value": "y"},
+                        {"type": "SYMBOL", "name": "container"}
+                    ]}
+                ]
+            },
+            "container": {"type": "SYMBOL", "name": "part"},
+            "part": {"type": "SEQ", "members": [
+                {"type": "SYMBOL", "name": "nullable"},
+                {"type": "STRING", "value": "b"}
+            ]},
+            "nullable": {"type": "PATTERN", "value": "x*"}
+        },
+        "extras": []
+    });
+    let (name, code) = generate_parser(&grammar.to_string()).unwrap();
+    let language = get_test_language(&name, &code, None);
+    for change in [
+        PrefixReplacement {
+            before: "ab",
+            after: "cb",
+            unchanged_suffix: "b",
+        },
+        PrefixReplacement {
+            before: "ab",
+            after: "cyb",
+            unchanged_suffix: "b",
+        },
+        PrefixReplacement {
+            before: "dqqqb",
+            after: "eqqqb",
+            unchanged_suffix: "qqqb",
+        },
+        PrefixReplacement {
+            before: "dqqqb",
+            after: "eqqqyb",
+            unchanged_suffix: "b",
+        },
+        PrefixReplacement {
+            before: "axxb",
+            after: "cxxb",
+            unchanged_suffix: "xxb",
+        },
+        PrefixReplacement {
+            before: "dqqqxxb",
+            after: "eqqqxxb",
+            unchanged_suffix: "qqqxxb",
+        },
+    ] {
+        let mut parser = Parser::new();
+        parser.set_language(&language).unwrap();
+        let mut old_tree = bounded_parse(&mut parser, change.before, None);
+        assert!(!old_tree.root_node().has_error(), "old input must be valid");
+        let old_prefix = change.before.strip_suffix(change.unchanged_suffix).unwrap();
+        let new_prefix = change.after.strip_suffix(change.unchanged_suffix).unwrap();
+        old_tree.edit(&InputEdit {
+            start_byte: 0,
+            old_end_byte: old_prefix.len(),
+            new_end_byte: new_prefix.len(),
+            start_position: Point::new(0, 0),
+            old_end_position: Point::new(0, old_prefix.len()),
+            new_end_position: Point::new(0, new_prefix.len()),
+        });
+
+        let incremental = bounded_parse(&mut parser, change.after, Some(&old_tree));
+        let mut cold_parser = Parser::new();
+        cold_parser.set_language(&language).unwrap();
+        let cold = bounded_parse(&mut cold_parser, change.after, None);
+        assert_eq!(
+            incremental.root_node().to_sexp(),
+            cold.root_node().to_sexp(),
+            "{} -> {}",
+            change.before,
+            change.after
+        );
+        assert_eq!(
+            node_ranges(incremental.root_node()),
+            node_ranges(cold.root_node()),
+            "{} -> {}",
+            change.before,
+            change.after
+        );
+    }
+}
+
+#[test]
 fn test_grammars_that_can_hang_on_eof() {
     let (parser_name, parser_code) = generate_parser(
         r#"

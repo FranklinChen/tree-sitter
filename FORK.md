@@ -1,9 +1,11 @@
-# This fork: the grammar contract
+# This fork: the grammar contract and runtime repairs
 
-This branch, `contract/v0.27.1`, is Tree-sitter at tag `v0.27.1` plus one opt-in feature: `tree-sitter generate
+This branch, `contract/v0.27.1`, is Tree-sitter at tag `v0.27.1` plus an opt-in feature: `tree-sitter generate
 --grammar-contract` also writes `src/grammar-contract.json`, a machine-readable statement of the prepared grammar the
-parser is generated from. Without the flag, the fork behaves exactly as `v0.27.1`. The feature is not part of upstream
-Tree-sitter, and there is no plan to propose it there. It is kept small and in upstream's style anyway, because that is
+parser is generated from. Without the flag, generation retains upstream's behavior. The fork also carries the narrowly
+scoped native recovery repair documented below; runtime behavior is no longer claimed to be identical to upstream.
+The contract feature is not part of upstream Tree-sitter, and there is no plan to propose it there. It is kept small
+and in upstream's style anyway, because that is
 what keeps it cheap to carry from one upstream release to the next.
 
 The format, and how to read it, is documented in the book:
@@ -34,14 +36,41 @@ What the fork changes, and nothing more:
   production's final productions (`walk_inlined_productions`, which allocates nothing more than upstream's loop did),
   and the subtype list of
   `node-types.json` (`supertype_subtype_refs`). `prepare_grammar` gains a capturing variant used only by the contract.
+- **Internal-token recovery progress.** The native runtime distinguishes an internal lexer's no-match, advancing,
+  empty and EOF observations. Recovery skips unrecognized source instead of repeatedly accepting an empty internal
+  token. Normal nullable tokens and external-scanner handling retain their behavior. Cached-token admission applies
+  the same recovery policy.
 
-What it does not change: the runtime library, the Wasm bindings, every byte of `parser.c`, `node-types.json`,
-`grammar.json` and the headers (with or without the flag), every error message, and every other command.
+The contract flag does not change grammar admission, generated `parser.c`, `node-types.json`, `grammar.json` or headers,
+with or without the flag. The runtime repair changes no public C, Rust or Wasm binding API, and does not reject nullable
+grammars. Commands that parse with this fork's runtime inherit the recovery repair. Generated-parser byte equality is
+a separate guarantee from runtime behavioral qualification.
 
 Files: `crates/generate/src/contract.rs` (the writer and its proof), `crates/generate/src/prepare_grammar/contract_structure.rs`
 (the rule trees and their paths), `flatten_grammar.rs`, `process_inlines.rs`, `node_types.rs`, `prepare_grammar.rs` and
 `generate.rs` (the shared code and wiring), `crates/cli/src/main.rs` (the flag), the book pages above,
-`docs/src/cli/generate.md`, this file, `fork/acceptance.sh` and `.github/workflows/contract.yml`.
+`docs/src/cli/generate.md`, this file, `fork/acceptance.sh` and `.github/workflows/contract.yml`. The runtime repair is
+owned by `lib/src/parser.c`, with native regression controls in `crates/cli/src/tests/parser_test.rs`.
+
+## Native recovery progress repair
+
+The grammar `seq('a', /x*/, 'b')` admits a legitimate empty token in a normal parse. On `a!b`, upstream 0.27.1 can
+repeatedly wrap an empty token in an ERROR without advancing past `!`. The repair classifies internal lexical
+observations before token admission. EOF remains a terminating observation; an empty non-EOF token is admitted only
+outside recovery. In recovery, speculative lexer reads are rewound before the existing decoded-character skip path
+consumes unrecognized source. Its lookahead evidence is retained. Cached and incrementally reused internal tokens
+cannot bypass this policy through an identical lexer mode. Recovery reuse examines the actual first leaf, so later
+children cannot supply an empty internal leaf with their input width or external-scanner provenance.
+
+The repair preserves syntactic optionality, nullable regexes in normal parsing, tokens whose nullable subexpressions
+are followed by consuming content, and the existing external-scanner state/progress rules. It does not establish
+termination for every grammar or scanner. The regression deck has a cooperative callback cutoff, so the known old
+loop fails without an unbounded test run. It covers nullable, quoted, optional and consuming tokens, speculative
+lookahead, UTF-8 error ranges and end-of-input contexts; it is not a hard process deadline.
+
+The November 2 runtime checks and their limits are recorded below, separately from historical generator acceptance.
+A consumer using the registry `tree-sitter` runtime does not receive this repair merely by pinning the fork's generator
+CLI. It must deliberately select a runtime revision containing the repair.
 
 ## How the contract is proven
 
@@ -55,9 +84,9 @@ One shape is refused by design: an `eof()` followed, within its own rule, by an 
 Flattening drops that path because the `eof()` is not its rule's last step, which the spliced tree cannot show. No
 grammar among Tree-sitter's fixtures has this shape.
 
-## Commits
+## Initial contract series
 
-On top of `v0.27.1`, nine commits, by subject:
+The initial series through contract format 4 comprised nine commits on top of `v0.27.1`, by subject:
 
 1. `refactor(generate): factor out flattening's path enumeration, inlining's walk and supertype subtypes`: no change of
    behavior or output; three upstream loops become functions the contract can share. A conflict here, when adopting a
@@ -83,9 +112,29 @@ On top of `v0.27.1`, nine commits, by subject:
 9. `feat(generate)!: state the grammar's name (contract format 4)`: the contract names its grammar, so a consumer that
    checks which grammar a file belongs to needs nothing beside the contract.
 
+Subsequent format 5 repairs preserve root aliases, publish builtin symbol names, and include referenced-only node
+kinds in the producer's inventory. The native recovery repair above is a separate runtime change; it does not change
+contract format 5 or generated parser bytes.
+
 ## How it has been verified
 
-As of 2026-10-30, on this series:
+### Native recovery qualification, November 2, 2026
+
+The native parser test module passes all **53 tests**, including two new tests with **31 authored scenarios**:
+
+- 25 cold inputs across five grammars: 11 valid, nine recovery, and five incomplete/end-of-input cases.
+- Six correctly edited incremental transitions, each compared with a cold parse for CST structure and every visible
+  node's byte range. These exercise nested parents with a nullable first leaf, distant prefix changes, valid repairs,
+  and consuming-first controls.
+
+The first-leaf admission refinement closes a source-level mismatch found during review; the incremental controls are
+not evidence of a separately reproduced hang. The cooperative cutoff bounds the known recovery loop in these tests,
+not arbitrary native execution. This batch did not run the full upstream suite, Wasm execution, or fuzzing, and does
+not establish release or consumer-deployment status.
+
+### Initial contract qualification, October 30, 2026
+
+On the historical contract series:
 
 - **Generator tests and lints.** `cargo test -p tree-sitter-generate --lib` (94 tests, among them the proof's negative
   control, which removes one path from a tree and expects the refusal, and regression tests for every defect the reviews
@@ -111,8 +160,8 @@ Not done:
   structures (subtypes through the same function as `node-types.json`, terminal names cross-checked) without an
   equivalence proof.
 - No fuzzing.
-- The Wasm build and its tests (`cargo xtask generate-fixtures --wasm`, `cargo xtask test-wasm`) were not run; the change
-  does not touch the runtime library or the Wasm bindings.
+- The Wasm build and its tests (`cargo xtask generate-fixtures --wasm`, `cargo xtask test-wasm`) were not run. That
+  historical contract-only series did not touch the runtime library or the Wasm bindings.
 
 A published contract format is never changed in place: any change a consumer must know about is a new version of the
 format string. Format 1 was published with the first four commits, format 2 with the sixth, format 3 with the eighth,
@@ -133,8 +182,9 @@ a commit can always fetch it; consumers pin a commit, never a branch. No copy of
 To adopt upstream release `vX.Y.Z`:
 
 1. `git fetch origin --tags` and create `contract/vX.Y.Z` at tag `vX.Y.Z`.
-2. Cherry-pick this series onto it, in order. Conflicts arise only in the files listed under Scope; resolve each so the
-   refactored upstream functions still do exactly what upstream's do.
+2. Cherry-pick this series onto it, in order. Conflicts arise in the files listed under Scope; preserve the contract's
+   generation equivalence separately from the runtime repair. If upstream has fixed the recovery defect, evaluate the
+   regression deck before retaining or dropping the local runtime change.
 3. Read upstream's changes to `crates/generate/src/prepare_grammar/` and `node_types.rs` since the previous release, for
    the drift classes below.
 4. Run every check under "How it has been verified" (the CI workflow runs them all), with the new upstream CLI as
