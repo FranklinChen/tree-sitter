@@ -1,9 +1,10 @@
-# This fork: the grammar contract and runtime repairs
+# This fork: the grammar contract, metadata and runtime repairs
 
 This branch, `contract/v0.27.1`, is Tree-sitter at tag `v0.27.1` plus an opt-in feature: `tree-sitter generate
 --grammar-contract` also writes `src/grammar-contract.json`, a machine-readable statement of the prepared grammar the
-parser is generated from. Without the flag, generation retains upstream's behavior. The fork also carries the narrowly
-scoped native recovery repair documented below; runtime behavior is no longer claimed to be identical to upstream.
+parser is generated from. The flag itself preserves the other generated artifacts. Separately, the fork corrects
+metadata for start rules and carries the narrowly scoped native recovery repair documented below. Neither
+unflagged generation nor runtime behavior is claimed to be identical to upstream for every grammar and input.
 The contract feature is not part of upstream Tree-sitter, and there is no plan to propose it there. It is kept small
 and in upstream's style anyway, because that is
 what keeps it cheap to carry from one upstream release to the next.
@@ -40,9 +41,15 @@ What the fork changes, and nothing more:
   empty and EOF observations. Recovery skips unrecognized source instead of repeatedly accepting an empty internal
   token. Normal nullable tokens and external-scanner handling retain their behavior. Cached-token admission applies
   the same recovery policy.
+- **Start-rule metadata.** `node-types.json` retains the start symbol's aliases and names its root by the default
+  alias, when one exists. Root membership comes from the root's actual name and namedness; contextual aliases do not
+  inherit it merely by sharing the start symbol. This changes schema metadata with or without the contract flag, not
+  the generated parser or grammar admission. A start rule declared as a supertype also retains its root marker,
+  matching the runtime's root wrapper.
 
-The contract flag does not change grammar admission, generated `parser.c`, `node-types.json`, `grammar.json` or headers,
-with or without the flag. The runtime repair changes no public C, Rust or Wasm binding API, and does not reject nullable
+The contract flag does not change grammar admission, generated `parser.c`, `node-types.json`, `grammar.json` or headers
+relative to the same fork without the flag. Upstream comparison must account separately for the start-rule metadata
+corrections. The runtime repair changes no public C, Rust or Wasm binding API, and does not reject nullable
 grammars. Commands that parse with this fork's runtime inherit the recovery repair. Generated-parser byte equality is
 a separate guarantee from runtime behavioral qualification.
 
@@ -51,6 +58,28 @@ Files: `crates/generate/src/contract.rs` (the writer and its proof), `crates/gen
 `generate.rs` (the shared code and wiring), `crates/cli/src/main.rs` (the flag), the book pages above,
 `docs/src/cli/generate.md`, this file, `fork/acceptance.sh` and `.github/workflows/contract.yml`. The runtime repair is
 owned by `lib/src/parser.c`, with native regression controls in `crates/cli/src/tests/parser_test.rs`.
+
+## Start-rule metadata corrections
+
+For a start rule `source: $ => seq('a', optional($.nested))` whose only reference is
+`nested: $ => seq('[', alias($.source, $.inner), ']')`, the runtime names the root `inner`. Upstream 0.27.1 instead
+describes that root as `source` in `node-types.json`. The fork's shared node-type writer describes `inner`, and the
+contract reads that corrected inventory. This was introduced with contract format 5, before the native recovery repair.
+
+A November 6 comparison of this grammar confirms the intended difference: `node-types.json` differs from upstream;
+`parser.c`, `grammar.json` and all three generated headers are identical. All six artifacts are identical between the
+fork's unflagged and contract-flagged runs. A contextual-alias control keeps the root's original name and restores the
+other aliases' metadata entries, which upstream omits. Those entries are not additional root kinds. A private
+`RootNodeIdentity`, derived once from the start symbol and its default alias, admits root membership after entry
+collection and merging. This removes the incorrect inference that every alias of rule zero is a root. Namedness is
+part of the identity, so an anonymous alias with the root's spelling cannot inherit its root marker either.
+
+The same identity rule retains the root marker when the start rule is declared as a supertype. For
+`source: $ => $.item`, `item: $ => 'a'`, with `source` in `supertypes`, native parsing still produces `source` as
+the root around `item`. Upstream's metadata omits that root marker; the fork preserves it on the supertype entry.
+
+`fork/acceptance.sh` retains strict byte equality on its existing fixture population. Passing that population does not
+establish universal equality with upstream or erase this documented metadata correction.
 
 ## Native recovery progress repair
 
@@ -118,6 +147,26 @@ contract format 5 or generated parser bytes.
 
 ## How it has been verified
 
+### Native release qualification, November 6, 2026
+
+The runtime repair at `ee2775065df9bfc3c401a7ae934e2e8552145142` passed the maintained native procedure on macOS ARM64:
+fetch fixture grammars, regenerate their parsers with the fork CLI, then `cargo xtask test -- --locked`. The full native
+suite passed **417 tests**, with **zero failures and one ignored doctest**: 319 CLI/native/corpus tests, 96 generator
+tests and two tag tests. The 53 parser tests below are included in that total, not an additional run.
+
+The acceptance checks compared **77 identical generations and 12 identical refusals** against upstream
+0.27.1. Its fixture population does not contain the default-root-alias counterexample documented above. These results
+qualify the native default-feature path, not Wasm execution, other platforms, fuzzing, publication or consumer adoption.
+The optional Rust `wasm` feature and the browser bindings require their own build and execution checks before a
+consumer of those features claims support for this repair.
+
+The subsequent root-identity metadata correction passed all **97 generator tests**, generator and CLI all-target
+Clippy, and the generator's build without default features. Native parsing of the default-alias, contextual-alias and
+same-spelling anonymous-alias controls agrees with each generated root identity. For all three controls, parser and
+header bytes remain equal to upstream; the contract flag preserves all six ordinary generated artifacts. The native
+runtime source is unchanged by this metadata correction. A separate start-supertype control likewise confirms the
+retained native root wrapper and its corrected metadata marker.
+
 ### Native recovery qualification, November 2, 2026
 
 The native parser test module passes all **53 tests**, including two new tests with **31 authored scenarios**:
@@ -170,7 +219,7 @@ and format 4 with the ninth; a consumer pins the commit whose format it reads.
 ## Continuous integration
 
 `.github/workflows/contract.yml` runs on every `contract/**` branch: the generator's tests and lints, Tree-sitter's full
-suite with fixtures regenerated by this CLI, and `fork/acceptance.sh` against the upstream CLI of the version the fork's
+native default-feature suite with fixtures regenerated by this CLI, and `fork/acceptance.sh` against the upstream CLI of the version the fork's
 `tree-sitter-cli` declares. Upstream's own workflows are unchanged and run only on upstream's branches.
 
 ## Maintaining the fork across upstream releases

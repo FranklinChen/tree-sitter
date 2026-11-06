@@ -56,6 +56,36 @@ struct NodeTypeRef {
     named: bool,
 }
 
+/// The one node identity the start symbol has at the root, after its default
+/// alias is applied. Contextual aliases of the same symbol are other identities.
+#[cfg(feature = "load")]
+struct RootNodeIdentity(NodeTypeRef);
+
+#[cfg(feature = "load")]
+impl RootNodeIdentity {
+    fn from_grammar(
+        syntax_grammar: &SyntaxGrammar,
+        lexical_grammar: &LexicalGrammar,
+        default_aliases: &AliasMap,
+    ) -> Option<Self> {
+        syntax_grammar.variables.first()?;
+        Some(Self(child_type_to_node_type(
+            &ChildType::Normal(Symbol::non_terminal(0)),
+            syntax_grammar,
+            lexical_grammar,
+            default_aliases,
+        )))
+    }
+
+    fn admits(&self, node: &NodeInfoJSON) -> bool {
+        self.0
+            == NodeTypeRef {
+                kind: node.kind,
+                named: node.named,
+            }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 #[cfg(feature = "load")]
 struct FieldInfoJSON {
@@ -678,7 +708,14 @@ fn generate_node_types(
         &extra_node_types,
     );
 
+    let root_identity =
+        RootNodeIdentity::from_grammar(syntax_grammar, lexical_grammar, default_aliases);
     let mut result = node_types_json.into_values().collect::<Vec<_>>();
+    // Root membership belongs to the final node identity, not the rule index
+    // that contributed fields to an entry. Admit it once after all merges.
+    for node in &mut result {
+        node.root = root_identity.as_ref().is_some_and(|root| root.admits(node));
+    }
     result.sort_unstable_by(|a, b| {
         b.subtypes
             .is_some()
@@ -1027,7 +1064,7 @@ fn build_regular_entries(
                 NodeInfoJSON {
                     kind: *kind,
                     named: is_named,
-                    root: i == 0,
+                    root: false,
                     extra: extra_node_types.contains(&node_type),
                     fields: Some(BTreeMap::new()),
                     children: None,

@@ -949,9 +949,9 @@ mod tests {
         );
     }
 
-    /// The (type, named) pairs `node-types.json` lists for `grammar`, in its
+    /// The complete `node-types.json` entries for `grammar`, in their emitted
     /// order, from the writer `generate` uses.
-    fn listed_node_types(grammar: &Value) -> Vec<Value> {
+    fn generated_node_types(grammar: &Value) -> Vec<Value> {
         let mut diagnostics = Vec::new();
         let input = parse_grammar(&grammar.to_string(), &mut diagnostics).unwrap();
         let (prepared, _) = prepare_grammar_with_structure(input, &mut diagnostics).unwrap();
@@ -970,9 +970,20 @@ mod tests {
             &prepared.str_pool,
         )
         .unwrap();
-        serde_json::from_str::<Vec<Value>>(&json)
-            .unwrap()
+        serde_json::from_str::<Vec<Value>>(&json).unwrap()
+    }
+
+    fn listed_node_types(grammar: &Value) -> Vec<Value> {
+        generated_node_types(grammar)
             .iter()
+            .map(|node| json!({ "type": node["type"], "named": node["named"] }))
+            .collect()
+    }
+
+    fn listed_root_types(grammar: &Value) -> Vec<Value> {
+        generated_node_types(grammar)
+            .iter()
+            .filter(|node| node["root"] == true)
             .map(|node| json!({ "type": node["type"], "named": node["named"] }))
             .collect()
     }
@@ -1002,10 +1013,14 @@ mod tests {
         assert!(!kinds.iter().any(|kind| kind["type"] == "source"));
         assert_eq!(*kinds, listed_node_types(&grammar));
         assert_eq!(result["builtin_symbol_names"], json!(["end"]));
+        assert_eq!(
+            listed_root_types(&grammar),
+            vec![json!({"type": "inner", "named": true})]
+        );
 
         // A plain occurrence prevents a default alias. The root then keeps
         // its own name while nested sites expose both contextual aliases.
-        let mut contextual = grammar.clone();
+        let mut contextual = grammar;
         contextual["rules"]["nested"] = json!({"type": "SEQ", "members": [
             {"type": "STRING", "value": "["},
             {"type": "ALIAS", "value": "left", "named": true,
@@ -1020,6 +1035,50 @@ mod tests {
         for name in ["source", "left", "right"] {
             assert!(kinds.iter().any(|kind| kind["type"] == name));
         }
+        assert_eq!(
+            listed_root_types(&contextual),
+            vec![json!({"type": "source", "named": true})]
+        );
+
+        // Equal spelling with different namedness is another node identity.
+        contextual["rules"]["nested"]["members"]
+            .as_array_mut()
+            .unwrap()
+            .insert(
+                4,
+                json!({"type": "ALIAS", "value": "source", "named": false,
+                       "content": {"type": "SYMBOL", "name": "source"}}),
+            );
+        let nodes = generated_node_types(&contextual);
+        assert!(nodes.iter().any(|node| {
+            node["type"] == "source" && node["named"] == false && node.get("root").is_none()
+        }));
+        assert_eq!(
+            listed_root_types(&contextual),
+            vec![json!({"type": "source", "named": true})]
+        );
+    }
+
+    #[test]
+    fn test_start_supertype_keeps_its_root_marker() {
+        let grammar = json!({
+            "name": "root_supertype",
+            "supertypes": ["source"],
+            "rules": {
+                "source": {"type": "SYMBOL", "name": "item"},
+                "item": {"type": "STRING", "value": "a"}
+            }
+        });
+
+        // A supertype is normally hidden inside a tree, but the runtime keeps
+        // the start symbol itself as the root instead of unwrapping its child.
+        assert_eq!(
+            listed_root_types(&grammar),
+            vec![json!({"type": "source", "named": true})]
+        );
+        let nodes = generated_node_types(&grammar);
+        let root = nodes.iter().find(|node| node["root"] == true).unwrap();
+        assert_eq!(root["subtypes"], json!([{"type": "item", "named": true}]));
     }
 
     #[test]

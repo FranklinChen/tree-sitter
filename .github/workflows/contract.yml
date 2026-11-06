@@ -1,15 +1,16 @@
-# CI for this fork's one feature, the grammar contract (see FORK.md).
+# CI for this fork's grammar contract, metadata and native repairs (see FORK.md).
 #
 # Upstream's own workflows run only on `master` and release branches; this
 # one runs on the contract branches (`contract/<upstream release>`, one per
 # adopted release) and checks three things:
 #
-# - the generator's tests and lints, where the change lives;
-# - Tree-sitter's own full suite, by its documented procedure (the fork's CLI
+# - the generator's tests and lints;
+# - Tree-sitter's native default-feature suite, by its documented procedure (the fork's CLI
 #   regenerates every fixture parser, then `cargo xtask test`);
-# - acceptance: for every fixture grammar, the fork writes exactly what the
+# - acceptance: for every grammar in the existing fixture population, the fork writes what the
 #   upstream release it is based on writes, plus grammar-contract.json
 #   (`fork/acceptance.sh`).
+#   This population excludes the documented start-rule metadata corrections.
 
 name: Grammar contract
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The fork's acceptance check: it only ADDS src/grammar-contract.json, and only
-# when asked to.
+# Strict upstream comparison over this fixture population, plus the guarantee
+# that the contract flag only ADDS src/grammar-contract.json.
 #
 # For every Tree-sitter fixture grammar, upstream's CLI runs
 # `tree-sitter generate src/grammar.json`, and this fork's CLI runs the same
@@ -15,6 +15,9 @@
 # shipped, and the repository's test grammars, whose grammar.js upstream's
 # CLI converts to grammar.json (a test grammar upstream refuses must be
 # refused identically by the fork).
+# The documented start-rule metadata corrections are covered separately;
+# they are not present in this population. This script does not ignore differences
+# in node-types.json or make a universal upstream-equivalence claim.
 #
 # Usage: fork/acceptance.sh UPSTREAM_CLI FORK_CLI WORK_DIR
 # Exits non-zero on any difference, parity failure or missing contract.

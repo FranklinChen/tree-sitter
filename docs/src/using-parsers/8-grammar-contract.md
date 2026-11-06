@@ -13,8 +13,9 @@ Every such re-implementation can drift from the real one.
 
 `tree-sitter generate --grammar-contract` therefore also writes `src/grammar-contract.json`: the facts the generator
 itself computes, taken from the same preparation of the grammar that `node-types.json` and the parse tables are built
-from. A consumer reads them instead of inferring them. Without the flag, `generate` writes exactly what upstream
-Tree-sitter writes.
+from. A consumer reads them instead of inferring them. The flag preserves the fork's other generated artifacts.
+The fork separately corrects upstream's metadata for start rules, as described below; it does not claim
+universal output equality with upstream.
 
 These generation guarantees are independent of the fork's empty-internal-token recovery repair, documented and
 qualified separately in `FORK.md`. That runtime repair does not change this contract's format.
@@ -56,7 +57,15 @@ Selecting this generator does not change a consumer's separately selected Tree-s
 Consumers checking name uniqueness must include these in addition to grammar symbols
 and aliases. Version 5 also corrects the kind inventory for a default-aliased start
 variable: its root uses the alias, just as nested occurrences do. This changes the
-metadata inventory, not the generated parser's behavior.
+shared `node-types.json` writer as well as the contract's metadata inventory, with
+or without the contract flag. For example, if the start rule `source` has default
+alias `inner`, the fork describes its root as `inner` where upstream 0.27.1
+describes `source`. The generated `parser.c` and its behavior are unchanged by
+this metadata correction. Contextual aliases retain their own metadata entries,
+but only the start symbol's actual name and namedness receive the `root` marker.
+This identity rule also preserves the marker when the start rule is declared as a
+supertype: the runtime retains that wrapper at the root even though nested
+occurrences are hidden.
 
 `node_kinds` includes both definitions and references in `node-types.json`.
 An inline alias can appear only in a child or field reference, so top-level
